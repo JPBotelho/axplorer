@@ -6,6 +6,7 @@ from logging import getLogger
 
 import numpy as np
 import torch
+from tqdm import tqdm
 
 from src.datasets import detokenize
 from src.envs.environment import do_score, do_stats
@@ -90,30 +91,28 @@ def sample_and_score(model, args, stoi, itos, env, temp, temp_span=0):
     with cpu_sink(process_batches, decouple=True) as sink:
         pending_batches = []
 
-        for i in range(todo):
-            if temp_span > 0:
-                curr_temp = temp + 0.1 * np.random.randint(temp_span + 1)
-            else:
-                curr_temp = temp
-            if i % 100 == 0:
-                with results_lock:
-                    scored_so_far = len(results)
-                logger.info(f"{i*sample_batch_size} / {todo * sample_batch_size} samples generated, {scored_so_far} scored")
+        with tqdm(total=todo * sample_batch_size, desc="Sampling", unit="ex") as pbar:
+            for i in range(todo):
+                if temp_span > 0:
+                    curr_temp = temp + 0.1 * np.random.randint(temp_span + 1)
+                else:
+                    curr_temp = temp
 
-            X_init = torch.empty((sample_batch_size, 1), dtype=torch.long)
-            X_init[:, 0] = stoi["BOS"]
-            X_init = X_init.to(args.device)
-            top_k = args.top_k if args.top_k != -1 else None
-            batch_numpy = model.generate(X_init, args.max_len + 1, temperature=curr_temp, top_k=top_k, do_sample=True).cpu().numpy()
+                X_init = torch.empty((sample_batch_size, 1), dtype=torch.long)
+                X_init[:, 0] = stoi["BOS"]
+                X_init = X_init.to(args.device)
+                top_k = args.top_k if args.top_k != -1 else None
+                batch_numpy = model.generate(X_init, args.max_len + 1, temperature=curr_temp, top_k=top_k, do_sample=True).cpu().numpy()
 
-            pending_batches.append(batch_numpy)
+                pending_batches.append(batch_numpy)
+                pbar.update(sample_batch_size)
 
-            if len(pending_batches) >= DETOK_CHUNK_SIZE:
+                if len(pending_batches) >= DETOK_CHUNK_SIZE:
+                    sink.submit(pending_batches)
+                    pending_batches = []
+
+            if pending_batches:
                 sink.submit(pending_batches)
-                pending_batches = []
-
-        if pending_batches:
-            sink.submit(pending_batches)
 
     executor.shutdown(wait=True)
 
