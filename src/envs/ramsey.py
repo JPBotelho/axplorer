@@ -200,7 +200,7 @@ class RamseyDataPoint(DataPoint):
         violations = max_score - self.score
         T = max(0.5, violations * 0.1)
         T_min = 0.01
-        max_sa_steps = n * n * 100
+        max_sa_steps = n * n * 10
         cooling = (T_min / T) ** (1.0 / max(1, max_sa_steps))
         n_pairs = len(all_pairs)
 
