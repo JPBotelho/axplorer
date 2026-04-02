@@ -1,8 +1,18 @@
+"""
+Ramsey graph environment for Axplorer.
+
+score(G) = C(N,s) + C(N,t) - (count_Ks_in_G + count_Kt_in_complement_G)
+
+Score is always >= 0. Max score = C(N,s) + C(N,t) iff G is a valid (s,t,N)-Ramsey graph.
+Local search: greedy hill climbing + simulated annealing.
+"""
+
+import math
 import numpy as np
 
 from src.envs.environment import BaseEnvironment, DataPoint
 from src.envs.tokenizers import DenseTokenizer, SparseTokenizerSequenceKTokens, SparseTokenizerSingleInteger
-from src.envs.utils import random_symmetry_adj_matrix, sort_graph_based_on_degree
+from src.envs.utils import random_symmetry_adj_matrix
 from src.utils import bool_flag
 
 
@@ -10,137 +20,143 @@ def _popcount(x):
     return bin(x).count('1')
 
 
+def count_ks_cliques_bitmask(adj, n, s):
+    if s <= 0:
+        return 1
+    if s == 1:
+        return n
+    if s == 2:
+        return sum(_popcount(adj[i]) for i in range(n)) // 2
+
+    def rec(candidates_mask, depth):
+        if depth == s:
+            return 1
+        total = 0
+        m = candidates_mask
+        while m:
+            lsb = m & (-m)
+            v = lsb.bit_length() - 1
+            m ^= lsb
+            higher_nbrs = adj[v] & candidates_mask & ~((1 << (v + 1)) - 1)
+            if _popcount(higher_nbrs) >= s - depth - 1:
+                total += rec(higher_nbrs, depth + 1)
+            candidates_mask ^= lsb
+        return total
+
+    return rec((1 << n) - 1, 0)
+
+
+def count_cliques_through_edge(adj, n, i, j, size):
+    if size < 2:
+        return 0
+    if size == 2:
+        return 1
+    common = adj[i] & adj[j] & ~(1 << i) & ~(1 << j)
+    if size == 3:
+        return _popcount(common)
+    common_verts = []
+    m = common
+    while m:
+        lsb = m & (-m)
+        common_verts.append(lsb.bit_length() - 1)
+        m ^= lsb
+    nc = len(common_verts)
+    if nc < size - 2:
+        return 0
+    v_idx = {v: k for k, v in enumerate(common_verts)}
+    restricted = [0] * nc
+    for ki, v in enumerate(common_verts):
+        mask = adj[v] & common
+        rm = mask
+        while rm:
+            lsb = rm & (-rm)
+            u = lsb.bit_length() - 1
+            ku = v_idx[u]
+            restricted[ki] |= 1 << ku
+            rm ^= lsb
+    return count_ks_cliques_bitmask(restricted, nc, size - 2)
+
+
 class RamseyDataPoint(DataPoint):
     """
-    Graph on N vertices with no K_s clique and no independent set of size t.
-    Searching for lower bounds on the Ramsey number R(s, t).
-    Score = number of edges if valid, -1 otherwise.
+    Graph on N vertices. Score = C(N,s)+C(N,t) - (K_s cliques + K_t cliques in complement).
+    Max score is achieved iff the graph is a valid (s,t,N)-Ramsey counterexample.
     """
 
     MAKE_OBJECT_CANONICAL = False
-    S = 5  # clique size to avoid
-    T = 5  # independent set size to avoid
+    S = 5
+    T = 5
 
     def __init__(self, N, init=False):
         super().__init__()
         self.N = N
         self.data = np.zeros((self.N, self.N), dtype=np.uint8)
+        self.adj = [0] * self.N
+        self.cadj = [0] * self.N
 
         if init:
             triu = np.random.randint(0, 2, (self.N, self.N), dtype=np.uint8)
             triu = np.triu(triu, 1)
             self.data = triu + triu.T
+            self._sync_from_data()
             self.local_search(improve_with_local_search=True)
-            if self.MAKE_OBJECT_CANONICAL:
-                self.data = sort_graph_based_on_degree(self.data)
             self.calc_features()
             self.calc_score()
 
-    # ── Bitmask helpers ───────────────────────────────────────────────────────
-
-    def _build_masks(self):
-        masks = []
+    def _sync_from_data(self):
+        full = (1 << self.N) - 1
+        self.adj = [0] * self.N
         for i in range(self.N):
             mask = 0
             for j in range(self.N):
                 if self.data[i, j]:
                     mask |= 1 << j
-            masks.append(mask)
-        return masks
+            self.adj[i] = mask
+        self.cadj = [(~self.adj[i]) & full & ~(1 << i) for i in range(self.N)]
 
-    def _build_comp_masks(self):
-        masks = []
-        for i in range(self.N):
-            mask = 0
-            for j in range(self.N):
-                if i != j and self.data[i, j] == 0:
-                    mask |= 1 << j
-            masks.append(mask)
-        return masks
+    def _flip_edge(self, i, j):
+        if self.data[i, j]:
+            self.data[i, j] = 0
+            self.data[j, i] = 0
+            self.adj[i] &= ~(1 << j)
+            self.adj[j] &= ~(1 << i)
+            self.cadj[i] |= (1 << j)
+            self.cadj[j] |= (1 << i)
+        else:
+            self.data[i, j] = 1
+            self.data[j, i] = 1
+            self.adj[i] |= (1 << j)
+            self.adj[j] |= (1 << i)
+            self.cadj[i] &= ~(1 << j)
+            self.cadj[j] &= ~(1 << i)
 
-    def _find_clique_k(self, masks, k):
-        """Return first tuple of k mutually adjacent vertices, or None."""
-        def recurse(chosen, cands, depth):
-            if depth == k:
-                return chosen
-            tmp = cands
-            while tmp:
-                lsb = tmp & (-tmp)
-                v = lsb.bit_length() - 1
-                tmp ^= lsb
-                new_cands = cands & masks[v] & ~((1 << (v + 1)) - 1)
-                if _popcount(new_cands) >= k - depth - 1:
-                    result = recurse(chosen + (v,), new_cands, depth + 1)
-                    if result is not None:
-                        return result
-            return None
-
-        for i in range(self.N):
-            cands = masks[i] & ~((1 << (i + 1)) - 1)
-            if _popcount(cands) >= k - 1:
-                result = recurse((i,), cands, 1)
-                if result is not None:
-                    return result
-        return None
-
-    # ── Violation finders ─────────────────────────────────────────────────────
-
-    def _find_ks(self):
-        return self._find_clique_k(self._build_masks(), self.S)
-
-    def _find_ist(self):
-        return self._find_clique_k(self._build_comp_masks(), self.T)
-
-    # ── Local search ──────────────────────────────────────────────────────────
-
-    def local_search(self, improve_with_local_search):
-        max_iter = 300
-        for _ in range(max_iter):
-            ks = self._find_ks()
-            ist = self._find_ist()
-            if ks is None and ist is None:
-                break
-
-            if ks is not None:
-                # Remove the edge in the clique with the highest combined degree (greedy)
-                verts = list(ks)
-                best_edge, best_deg = None, -1
-                for a in range(len(verts)):
-                    for b in range(a + 1, len(verts)):
-                        i, j = verts[a], verts[b]
-                        deg = int(self.data[i].sum()) + int(self.data[j].sum())
-                        if deg > best_deg:
-                            best_deg = deg
-                            best_edge = (i, j)
-                if best_edge:
-                    i, j = best_edge
-                    self.data[i, j] = 0
-                    self.data[j, i] = 0
-
-            if ist is not None:
-                # Add the edge in the IS with the lowest combined degree (greedy)
-                verts = list(ist)
-                best_edge, best_deg = None, float('inf')
-                for a in range(len(verts)):
-                    for b in range(a + 1, len(verts)):
-                        i, j = verts[a], verts[b]
-                        if self.data[i, j] == 0:
-                            deg = int(self.data[i].sum()) + int(self.data[j].sum())
-                            if deg < best_deg:
-                                best_deg = deg
-                                best_edge = (i, j)
-                if best_edge:
-                    i, j = best_edge
-                    self.data[i, j] = 1
-                    self.data[j, i] = 1
-
-    # ── Score / features ──────────────────────────────────────────────────────
+    def _score_delta_for_flip(self, i, j):
+        s = self.__class__.S
+        t = self.__class__.T
+        if self.data[i, j]:
+            ks_delta = -count_cliques_through_edge(self.adj, self.N, i, j, s)
+            self.cadj[i] |= (1 << j)
+            self.cadj[j] |= (1 << i)
+            kt_delta = +count_cliques_through_edge(self.cadj, self.N, i, j, t)
+            self.cadj[i] &= ~(1 << j)
+            self.cadj[j] &= ~(1 << i)
+        else:
+            self.adj[i] |= (1 << j)
+            self.adj[j] |= (1 << i)
+            ks_delta = +count_cliques_through_edge(self.adj, self.N, i, j, s)
+            self.adj[i] &= ~(1 << j)
+            self.adj[j] &= ~(1 << i)
+            kt_delta = -count_cliques_through_edge(self.cadj, self.N, i, j, t)
+        return -(ks_delta + kt_delta)
 
     def calc_score(self):
-        if self._find_ks() is not None or self._find_ist() is not None:
-            self.score = -1
-        else:
-            self.score = int(self.data.sum()) // 2
+        self._sync_from_data()
+        s = self.__class__.S
+        t = self.__class__.T
+        ks = count_ks_cliques_bitmask(self.adj, self.N, s)
+        kt = count_ks_cliques_bitmask(self.cadj, self.N, t)
+        max_score = math.comb(self.N, s) + math.comb(self.N, t)
+        self.score = max_score - (ks + kt)
 
     def calc_features(self):
         w = []
@@ -149,7 +165,56 @@ class RamseyDataPoint(DataPoint):
                 w.append(self.data[i, j])
         self.features = ",".join(map(str, w))
 
-    # ── Multiprocessing param passing ─────────────────────────────────────────
+    def local_search(self, improve_with_local_search):
+        n = self.N
+        s = self.__class__.S
+        t = self.__class__.T
+        max_score = math.comb(n, s) + math.comb(n, t)
+        self._sync_from_data()
+
+        ks = count_ks_cliques_bitmask(self.adj, n, s)
+        kt = count_ks_cliques_bitmask(self.cadj, n, t)
+        current_score = max_score - (ks + kt)
+        self.score = current_score
+
+        if current_score == max_score:
+            return
+
+        all_pairs = [(i, j) for i in range(n) for j in range(i + 1, n)]
+        rng = np.random.default_rng()
+
+        # Phase 1: greedy hill climbing
+        improved = True
+        while improved and self.score < max_score:
+            improved = False
+            for (i, j) in all_pairs:
+                delta = self._score_delta_for_flip(i, j)
+                if delta > 0:
+                    self._flip_edge(i, j)
+                    self.score += delta
+                    improved = True
+
+        if self.score == max_score or not improve_with_local_search:
+            return
+
+        # Phase 2: simulated annealing
+        violations = max_score - self.score
+        T = max(0.5, violations * 0.1)
+        T_min = 0.01
+        max_sa_steps = n * n * 100
+        cooling = (T_min / T) ** (1.0 / max(1, max_sa_steps))
+        n_pairs = len(all_pairs)
+
+        for _ in range(max_sa_steps):
+            if self.score == max_score:
+                break
+            T *= cooling
+            idx = rng.integers(n_pairs)
+            i, j = all_pairs[idx]
+            delta = self._score_delta_for_flip(i, j)
+            if delta > 0 or (T > T_min and rng.random() < math.exp(delta / T)):
+                self._flip_edge(i, j)
+                self.score += delta
 
     @classmethod
     def _update_class_params(cls, pars):
