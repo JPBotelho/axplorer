@@ -67,7 +67,10 @@ def generate_and_score(args, classname, train_data_path=None, test_data_path=Non
     pop_size = getattr(args, 'pop_size', None)
     per_batch_top_k = None
     if pop_size is not None and num_batches_total > 0:
-        per_batch_top_k = max(1, (pop_size * 4) // num_batches_total)
+        # Cap denominator so we never return fewer than 40 candidates per batch.
+        # For huge gensize values the formula would otherwise collapse to 1.
+        effective_batches = min(num_batches_total, (pop_size * 4) // 40)
+        per_batch_top_k = max(40, (pop_size * 4) // max(1, effective_batches))
 
     gen_log_interval = getattr(args, 'gen_log_interval', 0)
     gen_save_interval = getattr(args, 'gen_save_interval', 600)
