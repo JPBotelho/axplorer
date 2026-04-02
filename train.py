@@ -166,7 +166,7 @@ if __name__ == "__main__":
                 f"Memory allocated: {torch.mps.current_allocated_memory()/(1024*1024):.2f}MB, reserved: {torch.mps.driver_allocated_memory()/(1024*1024):.2f}MB"
             )
 
-        batch_loader = InfiniteDataLoader(train_dataset, batch_size=args.batch_size, pin_memory=True, num_workers=0)
+        batch_loader = InfiniteDataLoader(train_dataset, batch_size=args.batch_size, pin_memory=True, num_workers=min(31, args.num_workers))
         best_loss = train(model, args, batch_loader, optimizer, test_dataset, current_best_loss=best_loss)
         log_resources(f"Epoch {epoch} AFTER_TRAIN")
         force_release_memory()
