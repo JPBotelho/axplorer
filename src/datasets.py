@@ -1,6 +1,7 @@
 import os
 import pickle
 import random
+import signal
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from itertools import repeat
@@ -128,7 +129,8 @@ def generate_and_score(args, classname, train_data_path=None, test_data_path=Non
                         data.extend(d)
                         _log_stats()
     except KeyboardInterrupt:
-        logger.info(f"Interrupted after {n_generated} examples — saving current pool...")
+        signal.signal(signal.SIGINT, signal.SIG_IGN)  # block further Ctrl+C until save completes
+        logger.info(f"Interrupted after {n_generated} examples — saving current pool (do not Ctrl+C again)...")
 
     if data:
         scores = np.array([d.score for d in data])
