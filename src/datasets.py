@@ -72,6 +72,7 @@ def generate_and_score(args, classname, train_data_path=None, test_data_path=Non
     last_logged = 0
     last_saved = time.time()
     n_generated = 0
+    seen_features = set()
 
     def _write_top_dot(top_k=10):
         if not data or train_data_path is None:
@@ -137,16 +138,22 @@ def generate_and_score(args, classname, train_data_path=None, test_data_path=Non
                         n_generated += bc
                         pbar.update(bc)
                         if chunk:
-                            data.extend(chunk)
+                            for dp in chunk:
+                                if dp.features not in seen_features:
+                                    seen_features.add(dp.features)
+                                    data.append(dp)
                             _log_stats()
         else:
             with tqdm(total=args.gensize, desc="Generating data", unit="ex") as pbar:
                 for t in batch_counts:
-                    d = classname._batch_generate_and_score(t, args.N, return_top_k=per_batch_top_k)
+                    chunk = classname._batch_generate_and_score(t, args.N, return_top_k=per_batch_top_k)
                     n_generated += t
                     pbar.update(t)
-                    if d is not None:
-                        data.extend(d)
+                    if chunk:
+                        for dp in chunk:
+                            if dp.features not in seen_features:
+                                seen_features.add(dp.features)
+                                data.append(dp)
                         _log_stats()
     except KeyboardInterrupt:
         signal.signal(signal.SIGINT, signal.SIG_IGN)  # block further Ctrl+C until save completes
