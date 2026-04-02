@@ -55,6 +55,9 @@ def generate_and_score(args, classname):
     if max_score is not None:
         logger.info(f"Max possible score: {max_score}")
 
+    if hasattr(classname, '_nb_warmup'):
+        classname._nb_warmup()
+
     # Return only the local top-k per batch to avoid shipping gensize objects over IPC.
     # Use 4x pop_size as budget so select_best still has good candidates to choose from.
     pop_size = getattr(args, 'pop_size', None)

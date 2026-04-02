@@ -290,6 +290,17 @@ class RamseyDataPoint(DataPoint):
         return math.comb(N, cls.S) + math.comb(N, cls.T)
 
     @classmethod
+    def _nb_warmup(cls):
+        """Trigger numba JIT compilation in the main process so forked workers inherit it."""
+        if not _NUMBA:
+            return
+        dummy = np.zeros(6, dtype=np.int64)
+        dummy[0] = 0b110010
+        dummy[1] = 0b100001
+        _nb_count_ks_cliques(dummy, 6, cls.S)
+        _nb_count_ks_cliques(dummy, 6, cls.T)
+
+    @classmethod
     def _update_class_params(cls, pars):
         cls.MAKE_OBJECT_CANONICAL, cls.S, cls.T, cls.GEN_LOCAL_SEARCH = pars
 
