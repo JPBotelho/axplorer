@@ -1,7 +1,7 @@
 import os
 import pickle
 import random
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from itertools import repeat
 from logging import getLogger
 
@@ -53,10 +53,13 @@ def generate_and_score(args, classname):
     if args.process_pool:
         pars = classname._save_class_params()
         with ProcessPoolExecutor(max_workers=args.num_workers) as executor:
+            futures = {
+                executor.submit(classname._batch_generate_and_score, bc, args.N, pars): bc
+                for bc in batch_counts
+            }
             with tqdm(total=args.gensize, desc="Generating data", unit="ex") as pbar:
-                for chunk in executor.map(
-                    classname._batch_generate_and_score, batch_counts, repeat(args.N, len(batch_counts)), repeat(pars, len(batch_counts))
-                ):
+                for future in as_completed(futures):
+                    chunk = future.result()
                     if chunk:
                         data.extend(chunk)
                         pbar.update(len(chunk))
