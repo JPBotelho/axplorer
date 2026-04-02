@@ -81,14 +81,12 @@ def generate_and_score(args, classname):
         for s in scores:
             counts[s] = counts.get(s, 0) + 1
         top10 = sorted(counts.items(), reverse=True)[:10]
-        top10_str = "  ".join(f"{s}×{c}" for s, c in top10)
         pcts = np.percentile(scores, [50, 75, 90, 99])
-        logger.info(
-            f"gen_progress: {n_generated}/{args.gensize} | pool: {len(scores)} | "
-            f"mean: {scores.mean():.1f} | "
-            f"p50: {pcts[0]:.0f} p75: {pcts[1]:.0f} p90: {pcts[2]:.0f} p99: {pcts[3]:.0f} | "
-            f"top10: [{top10_str}]"
-        )
+        lines = [f"gen_progress: {n_generated}/{args.gensize} | pool: {len(scores)}"]
+        for s, c in reversed(top10):
+            lines.append(f"  {s} x{c}")
+        lines.append(f"  mean: {scores.mean():.1f} | p50: {pcts[0]:.0f} | p75: {pcts[1]:.0f} | p90: {pcts[2]:.0f} | p99: {pcts[3]:.0f}")
+        logger.info("\n".join(lines))
 
     if args.process_pool:
         pars = classname._save_class_params()
