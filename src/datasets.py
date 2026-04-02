@@ -48,10 +48,12 @@ def generate_and_score(args, classname, train_data_path=None, test_data_path=Non
     """
     data = []
     BATCH = args.gen_batch_size
-    batch_counts = [BATCH] * (args.gensize // BATCH)
+    num_batches = args.gensize // BATCH
     rem = args.gensize % BATCH
-    if rem:
-        batch_counts.append(rem)
+    # Use itertools.repeat to avoid materializing a potentially huge list
+    import itertools
+    batch_counts_iter = itertools.chain(itertools.repeat(BATCH, num_batches), [rem] if rem else [])
+    num_batches_total = num_batches + (1 if rem else 0)
 
     max_score = classname.max_possible_score(args.N)
     if max_score is not None:
@@ -64,8 +66,8 @@ def generate_and_score(args, classname, train_data_path=None, test_data_path=Non
     # Use 4x pop_size as budget so select_best still has good candidates to choose from.
     pop_size = getattr(args, 'pop_size', None)
     per_batch_top_k = None
-    if pop_size is not None and len(batch_counts) > 0:
-        per_batch_top_k = max(1, (pop_size * 4) // len(batch_counts))
+    if pop_size is not None and num_batches_total > 0:
+        per_batch_top_k = max(1, (pop_size * 4) // num_batches_total)
 
     gen_log_interval = getattr(args, 'gen_log_interval', 0)
     gen_save_interval = getattr(args, 'gen_save_interval', 600)
@@ -125,27 +127,38 @@ def generate_and_score(args, classname, train_data_path=None, test_data_path=Non
 
     try:
         if args.process_pool:
+            import concurrent.futures
             pars = classname._save_class_params()
+            max_pending = args.num_workers * 2
             with ProcessPoolExecutor(max_workers=args.num_workers) as executor:
-                futures = {
-                    executor.submit(classname._batch_generate_and_score, bc, args.N, pars, per_batch_top_k): bc
-                    for bc in batch_counts
-                }
+                pending = {}
+                for bc in itertools.islice(batch_counts_iter, max_pending):
+                    f = executor.submit(classname._batch_generate_and_score, bc, args.N, pars, per_batch_top_k)
+                    pending[f] = bc
                 with tqdm(total=args.gensize, desc="Generating data", unit="ex") as pbar:
-                    for future in as_completed(futures):
-                        chunk = future.result()
-                        bc = futures[future]
-                        n_generated += bc
-                        pbar.update(bc)
-                        if chunk:
-                            for dp in chunk:
-                                if dp.features not in seen_features:
-                                    seen_features.add(dp.features)
-                                    data.append(dp)
-                            _log_stats()
+                    while pending:
+                        done, _ = concurrent.futures.wait(pending, return_when=concurrent.futures.FIRST_COMPLETED)
+                        for future in done:
+                            bc = pending.pop(future)
+                            chunk = future.result()
+                            n_generated += bc
+                            pbar.update(bc)
+                            if chunk:
+                                for dp in chunk:
+                                    if dp.features not in seen_features:
+                                        seen_features.add(dp.features)
+                                        data.append(dp)
+                                _log_stats()
+                            # submit next batch
+                            try:
+                                next_bc = next(batch_counts_iter)
+                                f = executor.submit(classname._batch_generate_and_score, next_bc, args.N, pars, per_batch_top_k)
+                                pending[f] = next_bc
+                            except StopIteration:
+                                pass
         else:
             with tqdm(total=args.gensize, desc="Generating data", unit="ex") as pbar:
-                for t in batch_counts:
+                for t in batch_counts_iter:
                     chunk = classname._batch_generate_and_score(t, args.N, return_top_k=per_batch_top_k)
                     n_generated += t
                     pbar.update(t)
