@@ -77,6 +77,7 @@ def sample_and_score(model, args, stoi, itos, env, temp, temp_span=0):
     results_lock = threading.Lock()
 
     executor = ProcessPoolExecutor(max_workers=min(20, args.num_workers))
+    score_pbar = tqdm(total=todo * sample_batch_size, desc="Scoring", unit="ex", position=1, leave=True)
 
     def process_batches(batches):
         nonlocal total_invalid
@@ -87,11 +88,12 @@ def sample_and_score(model, args, stoi, itos, env, temp, temp_span=0):
             results.extend(valid_data)
             total_invalid += n_invalid
             all_processed_data.extend(processed_data)
+            score_pbar.update(len(all_data))
 
     with cpu_sink(process_batches, decouple=True) as sink:
         pending_batches = []
 
-        with tqdm(total=todo * sample_batch_size, desc="Sampling", unit="ex") as pbar:
+        with tqdm(total=todo * sample_batch_size, desc="Sampling", unit="ex", position=0, leave=True) as pbar:
             for i in range(todo):
                 if temp_span > 0:
                     curr_temp = temp + 0.1 * np.random.randint(temp_span + 1)
@@ -114,6 +116,7 @@ def sample_and_score(model, args, stoi, itos, env, temp, temp_span=0):
             if pending_batches:
                 sink.submit(pending_batches)
 
+    score_pbar.close()
     executor.shutdown(wait=True)
 
     do_stats(total_invalid, all_processed_data)

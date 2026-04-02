@@ -5,6 +5,7 @@ from logging import getLogger
 
 import numpy as np
 import torch
+from tqdm import tqdm
 
 from src.datasets import CharDataset, InfiniteDataLoader, load_initial_data, update_datasets
 from src.envs import ENVS, build_env
@@ -149,8 +150,8 @@ if __name__ == "__main__":
             torch.mps.empty_cache()
 
         # tokenize
-        train_words = [env.tokenizer.encode(d) for d in train_set]
-        test_words = [env.tokenizer.encode(d) for d in test_set]
+        train_words = [env.tokenizer.encode(d) for d in tqdm(train_set, desc="Tokenizing train", unit="ex")]
+        test_words = [env.tokenizer.encode(d) for d in tqdm(test_set, desc="Tokenizing test", unit="ex")]
         # data loaders
         train_dataset = CharDataset(train_words, args.max_len, stoi)
         test_dataset = CharDataset(test_words, args.max_len, stoi)

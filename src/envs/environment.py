@@ -5,6 +5,8 @@ from concurrent.futures import ProcessPoolExecutor
 from itertools import repeat
 from logging import getLogger
 
+from tqdm import tqdm
+
 logger = getLogger()
 
 
@@ -123,8 +125,7 @@ def do_score(data, args, executor=None):
     n_invalid = 0
     processed_data = []
     if not args.process_pool:
-        for d in data:
-            # warning, change the original list
+        for d in tqdm(data, desc="Scoring", unit="ex"):
             res, invalid = _do_score(d, args.always_search, args.redeem_only)
             n_invalid += invalid
             processed_data.append(res)
@@ -134,12 +135,12 @@ def do_score(data, args, executor=None):
         chunksize = max(1, len(data) // (args.num_workers * 32))
 
         if executor is not None:
-            for d, invalid in executor.map(_do_score, data, repeat(args.always_search), repeat(args.redeem_only), repeat(pars), chunksize=chunksize):
+            for d, invalid in tqdm(executor.map(_do_score, data, repeat(args.always_search), repeat(args.redeem_only), repeat(pars), chunksize=chunksize), total=len(data), desc="Scoring", unit="ex"):
                 processed_data.append(d)
                 n_invalid += invalid
         else:
             with ProcessPoolExecutor(max_workers=args.num_workers) as ex:
-                for d, invalid in ex.map(_do_score, data, repeat(args.always_search), repeat(args.redeem_only), repeat(pars), chunksize=chunksize):
+                for d, invalid in tqdm(ex.map(_do_score, data, repeat(args.always_search), repeat(args.redeem_only), repeat(pars), chunksize=chunksize), total=len(data), desc="Scoring", unit="ex"):
                     processed_data.append(d)
                     n_invalid += invalid
 
