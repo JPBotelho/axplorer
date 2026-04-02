@@ -66,21 +66,29 @@ def generate_and_score(args, classname):
         per_batch_top_k = max(1, (pop_size * 4) // len(batch_counts))
 
     gen_log_interval = getattr(args, 'gen_log_interval', 0)
-    best_score = None
     last_logged = 0
     n_generated = 0
 
-    def _update_best(chunk):
-        nonlocal best_score
-        for dp in chunk:
-            if best_score is None or dp.score > best_score:
-                best_score = dp.score
-
-    def _maybe_log():
+    def _log_stats():
         nonlocal last_logged
-        if gen_log_interval > 0 and n_generated - last_logged >= gen_log_interval:
-            logger.info(f"gen_progress: {n_generated} / {args.gensize} | best_score_so_far: {best_score}")
-            last_logged = n_generated
+        if gen_log_interval <= 0 or n_generated - last_logged < gen_log_interval:
+            return
+        last_logged = n_generated
+        if not data:
+            return
+        scores = np.array([d.score for d in data])
+        counts = {}
+        for s in scores:
+            counts[s] = counts.get(s, 0) + 1
+        top10 = sorted(counts.items(), reverse=True)[:10]
+        top10_str = "  ".join(f"{s}×{c}" for s, c in top10)
+        pcts = np.percentile(scores, [50, 75, 90, 99])
+        logger.info(
+            f"gen_progress: {n_generated}/{args.gensize} | pool: {len(scores)} | "
+            f"mean: {scores.mean():.1f} | "
+            f"p50: {pcts[0]:.0f} p75: {pcts[1]:.0f} p90: {pcts[2]:.0f} p99: {pcts[3]:.0f} | "
+            f"top10: [{top10_str}]"
+        )
 
     if args.process_pool:
         pars = classname._save_class_params()
@@ -97,8 +105,7 @@ def generate_and_score(args, classname):
                     pbar.update(bc)
                     if chunk:
                         data.extend(chunk)
-                        _update_best(chunk)
-                        _maybe_log()
+                        _log_stats()
     else:
         with tqdm(total=args.gensize, desc="Generating data", unit="ex") as pbar:
             for t in batch_counts:
@@ -107,11 +114,11 @@ def generate_and_score(args, classname):
                 pbar.update(t)
                 if d is not None:
                     data.extend(d)
-                    _update_best(d)
-                    _maybe_log()
+                    _log_stats()
 
-    if best_score is not None:
-        logger.info(f"gen_complete: {len(data)} examples | best_score: {best_score}")
+    if data:
+        scores = np.array([d.score for d in data])
+        logger.info(f"gen_complete: {n_generated} generated | pool: {len(scores)} | max: {scores.max()} | mean: {scores.mean():.1f}")
     return data
 
 
