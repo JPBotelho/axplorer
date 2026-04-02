@@ -73,11 +73,31 @@ def generate_and_score(args, classname, train_data_path=None, test_data_path=Non
     last_saved = time.time()
     n_generated = 0
 
+    def _write_top_dot(top_k=10):
+        if not data or train_data_path is None:
+            return
+        top = sorted(data, key=lambda d: d.score, reverse=True)[:top_k]
+        dot_dir = os.path.join(os.path.dirname(train_data_path), "top_graphs")
+        os.makedirs(dot_dir, exist_ok=True)
+        for rank, d in enumerate(top, 1):
+            path = os.path.join(dot_dir, f"rank_{rank:02d}_score_{d.score}.dot")
+            n = d.N
+            lines = [f"graph rank{rank} {{", f'  label="rank {rank} | score {d.score}";']
+            for i in range(n):
+                for j in range(i + 1, n):
+                    if d.data[i, j]:
+                        lines.append(f"  {i} -- {j};")
+            lines.append("}")
+            with open(path, "w") as f:
+                f.write("\n".join(lines) + "\n")
+        logger.info(f"Top {len(top)} graphs written to {dot_dir}/")
+
     def _save():
         nonlocal last_saved
         if not data or train_data_path is None:
             return
         update_datasets(args, data, [], None, train_data_path, test_data_path)
+        _write_top_dot()
         logger.info(f"Checkpoint saved ({len(data)} pool items)")
         last_saved = time.time()
 
@@ -135,6 +155,7 @@ def generate_and_score(args, classname, train_data_path=None, test_data_path=Non
     if data:
         scores = np.array([d.score for d in data])
         logger.info(f"gen_complete: {n_generated} generated | pool: {len(scores)} | max: {scores.max()} | mean: {scores.mean():.1f}")
+        _write_top_dot()
     return data
 
 
