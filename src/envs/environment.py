@@ -36,7 +36,7 @@ class DataPoint(ABC):
         return
 
     @classmethod
-    def _batch_generate_and_score(cls, batch_size, N, pars=None):
+    def _batch_generate_and_score(cls, batch_size, N, pars=None, return_top_k=None):
         out = []
         if pars is not None:
             cls._update_class_params(pars)
@@ -44,6 +44,9 @@ class DataPoint(ABC):
             d = cls(N=N, init=True)
             if d.score >= 0:
                 out.append(d)
+        if return_top_k is not None and len(out) > return_top_k:
+            out.sort(key=lambda x: x.score, reverse=True)
+            out = out[:return_top_k]
         return out
 
 

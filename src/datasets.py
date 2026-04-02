@@ -55,9 +55,17 @@ def generate_and_score(args, classname):
     if max_score is not None:
         logger.info(f"Max possible score: {max_score}")
 
+    # Return only the local top-k per batch to avoid shipping gensize objects over IPC.
+    # Use 4x pop_size as budget so select_best still has good candidates to choose from.
+    pop_size = getattr(args, 'pop_size', None)
+    per_batch_top_k = None
+    if pop_size is not None and len(batch_counts) > 0:
+        per_batch_top_k = max(1, (pop_size * 4) // len(batch_counts))
+
     gen_log_interval = getattr(args, 'gen_log_interval', 0)
     best_score = None
     last_logged = 0
+    n_generated = 0
 
     def _update_best(chunk):
         nonlocal best_score
@@ -65,7 +73,7 @@ def generate_and_score(args, classname):
             if best_score is None or dp.score > best_score:
                 best_score = dp.score
 
-    def _maybe_log(n_generated):
+    def _maybe_log():
         nonlocal last_logged
         if gen_log_interval > 0 and n_generated - last_logged >= gen_log_interval:
             logger.info(f"gen_progress: {n_generated} / {args.gensize} | best_score_so_far: {best_score}")
@@ -75,26 +83,29 @@ def generate_and_score(args, classname):
         pars = classname._save_class_params()
         with ProcessPoolExecutor(max_workers=args.num_workers) as executor:
             futures = {
-                executor.submit(classname._batch_generate_and_score, bc, args.N, pars): bc
+                executor.submit(classname._batch_generate_and_score, bc, args.N, pars, per_batch_top_k): bc
                 for bc in batch_counts
             }
             with tqdm(total=args.gensize, desc="Generating data", unit="ex") as pbar:
                 for future in as_completed(futures):
                     chunk = future.result()
+                    bc = futures[future]
+                    n_generated += bc
+                    pbar.update(bc)
                     if chunk:
                         data.extend(chunk)
-                        pbar.update(len(chunk))
                         _update_best(chunk)
-                        _maybe_log(len(data))
+                        _maybe_log()
     else:
         with tqdm(total=args.gensize, desc="Generating data", unit="ex") as pbar:
             for t in batch_counts:
-                d = classname._batch_generate_and_score(t, args.N)
+                d = classname._batch_generate_and_score(t, args.N, return_top_k=per_batch_top_k)
+                n_generated += t
+                pbar.update(t)
                 if d is not None:
                     data.extend(d)
-                    pbar.update(len(d))
                     _update_best(d)
-                    _maybe_log(len(data))
+                    _maybe_log()
 
     if best_score is not None:
         logger.info(f"gen_complete: {len(data)} examples | best_score: {best_score}")
