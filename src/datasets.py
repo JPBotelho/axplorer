@@ -50,6 +50,23 @@ def generate_and_score(args, classname):
     rem = args.gensize % BATCH
     if rem:
         batch_counts.append(rem)
+
+    gen_log_interval = getattr(args, 'gen_log_interval', 0)
+    best_score = None
+    last_logged = 0
+
+    def _update_best(chunk):
+        nonlocal best_score
+        for dp in chunk:
+            if best_score is None or dp.score > best_score:
+                best_score = dp.score
+
+    def _maybe_log(n_generated):
+        nonlocal last_logged
+        if gen_log_interval > 0 and n_generated - last_logged >= gen_log_interval:
+            logger.info(f"gen_progress: {n_generated} / {args.gensize} | best_score_so_far: {best_score}")
+            last_logged = n_generated
+
     if args.process_pool:
         pars = classname._save_class_params()
         with ProcessPoolExecutor(max_workers=args.num_workers) as executor:
@@ -63,6 +80,8 @@ def generate_and_score(args, classname):
                     if chunk:
                         data.extend(chunk)
                         pbar.update(len(chunk))
+                        _update_best(chunk)
+                        _maybe_log(len(data))
     else:
         with tqdm(total=args.gensize, desc="Generating data", unit="ex") as pbar:
             for t in batch_counts:
@@ -70,6 +89,11 @@ def generate_and_score(args, classname):
                 if d is not None:
                     data.extend(d)
                     pbar.update(len(d))
+                    _update_best(d)
+                    _maybe_log(len(data))
+
+    if best_score is not None:
+        logger.info(f"gen_complete: {len(data)} examples | best_score: {best_score}")
     return data
 
 

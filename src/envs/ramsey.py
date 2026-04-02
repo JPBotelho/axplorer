@@ -86,6 +86,7 @@ class RamseyDataPoint(DataPoint):
     MAKE_OBJECT_CANONICAL = False
     S = 5
     T = 5
+    GEN_LOCAL_SEARCH = True
 
     def __init__(self, N, init=False):
         super().__init__()
@@ -99,7 +100,8 @@ class RamseyDataPoint(DataPoint):
             triu = np.triu(triu, 1)
             self.data = triu + triu.T
             self._sync_from_data()
-            self.local_search(improve_with_local_search=True)
+            if self.__class__.GEN_LOCAL_SEARCH:
+                self.local_search(improve_with_local_search=True)
             self.calc_features()
             self.calc_score()
 
@@ -218,11 +220,11 @@ class RamseyDataPoint(DataPoint):
 
     @classmethod
     def _update_class_params(cls, pars):
-        cls.MAKE_OBJECT_CANONICAL, cls.S, cls.T = pars
+        cls.MAKE_OBJECT_CANONICAL, cls.S, cls.T, cls.GEN_LOCAL_SEARCH = pars
 
     @classmethod
     def _save_class_params(cls):
-        return cls.MAKE_OBJECT_CANONICAL, cls.S, cls.T
+        return cls.MAKE_OBJECT_CANONICAL, cls.S, cls.T, cls.GEN_LOCAL_SEARCH
 
 
 class RamseyEnvironment(BaseEnvironment):
@@ -235,6 +237,7 @@ class RamseyEnvironment(BaseEnvironment):
         self.data_class.MAKE_OBJECT_CANONICAL = params.make_object_canonical
         self.data_class.S = params.ramsey_s
         self.data_class.T = params.ramsey_t
+        self.data_class.GEN_LOCAL_SEARCH = params.gen_local_search
         encoding_augmentation = random_symmetry_adj_matrix if params.augment_data_representation else None
         if params.encoding_tokens == "single_integer":
             self.tokenizer = SparseTokenizerSingleInteger(
@@ -268,3 +271,5 @@ class RamseyEnvironment(BaseEnvironment):
                             help="Random vertex relabelling augmentation")
         parser.add_argument("--pow2base", type=int, default=1,
                             help="Adjacency entries packed together (adjacency encoding only)")
+        parser.add_argument("--gen_local_search", type=bool_flag, default="true",
+                            help="Run local search on each generated example during initial data generation")
