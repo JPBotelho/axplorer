@@ -28,7 +28,7 @@ def detokenize(data, args, env, executor=None):
                 if chunk:
                     res.extend(chunk)
         else:
-            with ProcessPoolExecutor(max_workers=min(20, args.num_workers)) as ex:
+            with ProcessPoolExecutor(max_workers=args.num_workers) as ex:
                 for chunk in ex.map(env.tokenizer.decode_batch, data_slices, repeat(pars, len(data_slices))):
                     if chunk:
                         res.extend(chunk)
@@ -52,7 +52,7 @@ def generate_and_score(args, classname):
         batch_counts.append(rem)
     if args.process_pool:
         pars = classname._save_class_params()
-        with ProcessPoolExecutor(max_workers=min(20, args.num_workers)) as executor:
+        with ProcessPoolExecutor(max_workers=args.num_workers) as executor:
             with tqdm(total=args.gensize, desc="Generating data", unit="ex") as pbar:
                 for chunk in executor.map(
                     classname._batch_generate_and_score, batch_counts, repeat(args.N, len(batch_counts)), repeat(pars, len(batch_counts))

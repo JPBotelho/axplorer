@@ -139,7 +139,7 @@ def do_score(data, args, executor=None):
                 processed_data.append(d)
                 n_invalid += invalid
         else:
-            with ProcessPoolExecutor(max_workers=args.num_workers) as ex:
+            with ProcessPoolExecutor(max_workers=min(args.num_workers, len(data))) as ex:
                 for d, invalid in tqdm(ex.map(_do_score, data, repeat(args.always_search), repeat(args.redeem_only), repeat(pars), chunksize=chunksize), total=len(data), desc="Scoring", unit="ex"):
                     processed_data.append(d)
                     n_invalid += invalid

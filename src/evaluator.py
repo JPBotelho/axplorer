@@ -76,7 +76,7 @@ def sample_and_score(model, args, stoi, itos, env, temp, temp_span=0):
     all_processed_data = []
     results_lock = threading.Lock()
 
-    executor = ProcessPoolExecutor(max_workers=min(20, args.num_workers))
+    executor = ProcessPoolExecutor(max_workers=args.num_workers)
     score_pbar = tqdm(total=todo * sample_batch_size, desc="Scoring", unit="ex", position=1, leave=True)
 
     def process_batches(batches):
