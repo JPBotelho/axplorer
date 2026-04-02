@@ -67,6 +67,7 @@ def get_parser():
     parser.add_argument("--data_generation_only", type=bool_flag, default="false", help="only generate data and exit")
     parser.add_argument("--gen_log_interval", type=int, default=1_000_000, help="log best score every N generated examples (0 to disable)")
     parser.add_argument("--gen_save_interval", type=int, default=60, help="save pool to disk every N seconds during generation (0 to disable)")
+    parser.add_argument("--per_batch_top_k", type=int, default=10, help="how many top candidates to return per generation batch")
 
     return parser
 
