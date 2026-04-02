@@ -2,7 +2,6 @@ import os
 import pickle
 import random
 from concurrent.futures import ProcessPoolExecutor, as_completed
-import itertools
 from itertools import repeat
 from logging import getLogger
 
@@ -54,27 +53,16 @@ def generate_and_score(args, classname):
     if args.process_pool:
         pars = classname._save_class_params()
         with ProcessPoolExecutor(max_workers=args.num_workers) as executor:
-            batch_iter = iter(batch_counts)
-            inflight = {}
-            # seed the pool with num_workers tasks
-            for bc in itertools.islice(batch_iter, args.num_workers):
-                f = executor.submit(classname._batch_generate_and_score, bc, args.N, pars)
-                inflight[f] = bc
+            futures = {
+                executor.submit(classname._batch_generate_and_score, bc, args.N, pars): bc
+                for bc in batch_counts
+            }
             with tqdm(total=args.gensize, desc="Generating data", unit="ex") as pbar:
-                while inflight:
-                    for future in as_completed(inflight):
-                        chunk = future.result()
-                        if chunk:
-                            data.extend(chunk)
-                            pbar.update(len(chunk))
-                        del inflight[future]
-                        try:
-                            bc = next(batch_iter)
-                            f = executor.submit(classname._batch_generate_and_score, bc, args.N, pars)
-                            inflight[f] = bc
-                        except StopIteration:
-                            pass
-                        break
+                for future in as_completed(futures):
+                    chunk = future.result()
+                    if chunk:
+                        data.extend(chunk)
+                        pbar.update(len(chunk))
     else:
         with tqdm(total=args.gensize, desc="Generating data", unit="ex") as pbar:
             for t in batch_counts:
