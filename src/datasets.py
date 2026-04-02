@@ -88,31 +88,34 @@ def generate_and_score(args, classname):
         lines.append(f"  mean: {scores.mean():.1f} | p50: {pcts[0]:.0f} | p75: {pcts[1]:.0f} | p90: {pcts[2]:.0f} | p99: {pcts[3]:.0f}")
         logger.info("\n".join(lines))
 
-    if args.process_pool:
-        pars = classname._save_class_params()
-        with ProcessPoolExecutor(max_workers=args.num_workers) as executor:
-            futures = {
-                executor.submit(classname._batch_generate_and_score, bc, args.N, pars, per_batch_top_k): bc
-                for bc in batch_counts
-            }
+    try:
+        if args.process_pool:
+            pars = classname._save_class_params()
+            with ProcessPoolExecutor(max_workers=args.num_workers) as executor:
+                futures = {
+                    executor.submit(classname._batch_generate_and_score, bc, args.N, pars, per_batch_top_k): bc
+                    for bc in batch_counts
+                }
+                with tqdm(total=args.gensize, desc="Generating data", unit="ex") as pbar:
+                    for future in as_completed(futures):
+                        chunk = future.result()
+                        bc = futures[future]
+                        n_generated += bc
+                        pbar.update(bc)
+                        if chunk:
+                            data.extend(chunk)
+                            _log_stats()
+        else:
             with tqdm(total=args.gensize, desc="Generating data", unit="ex") as pbar:
-                for future in as_completed(futures):
-                    chunk = future.result()
-                    bc = futures[future]
-                    n_generated += bc
-                    pbar.update(bc)
-                    if chunk:
-                        data.extend(chunk)
+                for t in batch_counts:
+                    d = classname._batch_generate_and_score(t, args.N, return_top_k=per_batch_top_k)
+                    n_generated += t
+                    pbar.update(t)
+                    if d is not None:
+                        data.extend(d)
                         _log_stats()
-    else:
-        with tqdm(total=args.gensize, desc="Generating data", unit="ex") as pbar:
-            for t in batch_counts:
-                d = classname._batch_generate_and_score(t, args.N, return_top_k=per_batch_top_k)
-                n_generated += t
-                pbar.update(t)
-                if d is not None:
-                    data.extend(d)
-                    _log_stats()
+    except KeyboardInterrupt:
+        logger.info(f"Interrupted after {n_generated} examples — saving current pool...")
 
     if data:
         scores = np.array([d.score for d in data])
