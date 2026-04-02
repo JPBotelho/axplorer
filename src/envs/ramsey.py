@@ -99,7 +99,6 @@ class RamseyDataPoint(DataPoint):
             triu = np.triu(triu, 1)
             self.data = triu + triu.T
             self._sync_from_data()
-            self.local_search(improve_with_local_search=True)
             self.calc_features()
             self.calc_score()
 
