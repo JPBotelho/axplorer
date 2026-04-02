@@ -161,15 +161,14 @@ class RamseyDataPoint(DataPoint):
             self.calc_score()
 
     def _sync_from_data(self):
-        full = (1 << self.N) - 1
-        self.adj = [0] * self.N
-        for i in range(self.N):
-            mask = 0
-            for j in range(self.N):
-                if self.data[i, j]:
-                    mask |= 1 << j
-            self.adj[i] = mask
-        self.cadj = [(~self.adj[i]) & full & ~(1 << i) for i in range(self.N)]
+        n = self.N
+        full = np.int64((1 << n) - 1)
+        powers = np.int64(1) << np.arange(n, dtype=np.int64)
+        adj_np = (self.data.astype(np.int64) @ powers)  # row dot powers = bitmask per row
+        no_self = ~powers & full
+        cadj_np = (~adj_np) & full & no_self
+        self.adj = list(adj_np)
+        self.cadj = list(cadj_np)
 
     def _flip_edge(self, i, j):
         if self.data[i, j]:
@@ -222,11 +221,8 @@ class RamseyDataPoint(DataPoint):
         self.score = max_score - (ks + kt)
 
     def calc_features(self):
-        w = []
-        for i in range(self.N):
-            for j in range(i + 1, self.N):
-                w.append(self.data[i, j])
-        self.features = ",".join(map(str, w))
+        idx = np.triu_indices(self.N, k=1)
+        self.features = ",".join(map(str, self.data[idx].tolist()))
 
     def local_search(self, improve_with_local_search):
         n = self.N
