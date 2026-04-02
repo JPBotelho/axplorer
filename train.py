@@ -52,7 +52,7 @@ def get_parser():
     parser.add_argument("--learning_rate", type=float, default=5e-4, help="learning rate")
     parser.add_argument("--weight_decay", type=float, default=0.01, help="weight decay")
     # evaluation against known "good sequences"
-    parser.add_argument("--gen_batch_size", type=int, default=50000, help="generation batch size")
+    parser.add_argument("--gen_batch_size", type=int, default=1000, help="generation batch size")
     parser.add_argument("--temperature", type=float, default=1.0, help="temperature")
     parser.add_argument("--temp_span", type=int, default=0, help="temperature span")
     parser.add_argument("--inc_temp", type=float, default=0.0, help="temperature")
