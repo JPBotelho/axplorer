@@ -15,6 +15,61 @@ from src.envs.tokenizers import DenseTokenizer, SparseTokenizerSequenceKTokens, 
 from src.envs.utils import random_symmetry_adj_matrix
 from src.utils import bool_flag
 
+try:
+    from numba import njit as _njit
+    _NUMBA = True
+except ImportError:
+    _NUMBA = False
+
+if _NUMBA:
+    @_njit(cache=True)
+    def _nb_popcount(x):
+        count = np.int64(0)
+        while x != np.int64(0):
+            x &= x - np.int64(1)
+            count += np.int64(1)
+        return count
+
+    @_njit(cache=True)
+    def _nb_ctz(x):
+        count = np.int64(0)
+        while (x & np.int64(1)) == np.int64(0):
+            x >>= np.int64(1)
+            count += np.int64(1)
+        return count
+
+    @_njit(cache=True)
+    def _nb_clique_rec(adj, candidates_mask, depth, s):
+        if depth == s:
+            return np.int64(1)
+        total = np.int64(0)
+        m = candidates_mask
+        while m != np.int64(0):
+            lsb = m & (-m)
+            v = _nb_ctz(lsb)
+            m ^= lsb
+            higher_mask = ~((np.int64(1) << (v + np.int64(1))) - np.int64(1))
+            higher_nbrs = adj[v] & candidates_mask & higher_mask
+            if _nb_popcount(higher_nbrs) >= s - depth - np.int64(1):
+                total += _nb_clique_rec(adj, higher_nbrs, depth + np.int64(1), s)
+            candidates_mask ^= lsb
+        return total
+
+    @_njit(cache=True)
+    def _nb_count_ks_cliques(adj, n, s):
+        s64 = np.int64(s)
+        if s64 <= np.int64(0):
+            return np.int64(1)
+        if s64 == np.int64(1):
+            return np.int64(n)
+        if s64 == np.int64(2):
+            total = np.int64(0)
+            for i in range(n):
+                total += _nb_popcount(adj[i])
+            return total >> np.int64(1)
+        all_mask = (np.int64(1) << np.int64(n)) - np.int64(1)
+        return _nb_clique_rec(adj, all_mask, np.int64(0), s64)
+
 
 def _popcount(x):
     return bin(x).count('1')
@@ -155,9 +210,15 @@ class RamseyDataPoint(DataPoint):
         self._sync_from_data()
         s = self.__class__.S
         t = self.__class__.T
-        ks = count_ks_cliques_bitmask(self.adj, self.N, s)
-        kt = count_ks_cliques_bitmask(self.cadj, self.N, t)
         max_score = math.comb(self.N, s) + math.comb(self.N, t)
+        if _NUMBA:
+            adj_arr = np.array(self.adj, dtype=np.int64)
+            cadj_arr = np.array(self.cadj, dtype=np.int64)
+            ks = int(_nb_count_ks_cliques(adj_arr, self.N, s))
+            kt = int(_nb_count_ks_cliques(cadj_arr, self.N, t))
+        else:
+            ks = count_ks_cliques_bitmask(self.adj, self.N, s)
+            kt = count_ks_cliques_bitmask(self.cadj, self.N, t)
         self.score = max_score - (ks + kt)
 
     def calc_features(self):
@@ -174,8 +235,14 @@ class RamseyDataPoint(DataPoint):
         max_score = math.comb(n, s) + math.comb(n, t)
         self._sync_from_data()
 
-        ks = count_ks_cliques_bitmask(self.adj, n, s)
-        kt = count_ks_cliques_bitmask(self.cadj, n, t)
+        if _NUMBA:
+            adj_arr = np.array(self.adj, dtype=np.int64)
+            cadj_arr = np.array(self.cadj, dtype=np.int64)
+            ks = int(_nb_count_ks_cliques(adj_arr, n, s))
+            kt = int(_nb_count_ks_cliques(cadj_arr, n, t))
+        else:
+            ks = count_ks_cliques_bitmask(self.adj, n, s)
+            kt = count_ks_cliques_bitmask(self.cadj, n, t)
         current_score = max_score - (ks + kt)
         self.score = current_score
 
