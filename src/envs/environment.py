@@ -28,6 +28,10 @@ class DataPoint(ABC):
         return
 
     @classmethod
+    def max_possible_score(cls, N):
+        return None
+
+    @classmethod
     def _update_class_params(cls, pars):
         return
 

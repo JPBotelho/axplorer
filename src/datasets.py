@@ -51,6 +51,10 @@ def generate_and_score(args, classname):
     if rem:
         batch_counts.append(rem)
 
+    max_score = classname.max_possible_score(args.N)
+    if max_score is not None:
+        logger.info(f"Max possible score: {max_score}")
+
     gen_log_interval = getattr(args, 'gen_log_interval', 0)
     best_score = None
     last_logged = 0

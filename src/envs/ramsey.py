@@ -219,6 +219,10 @@ class RamseyDataPoint(DataPoint):
                 self.score += delta
 
     @classmethod
+    def max_possible_score(cls, N):
+        return math.comb(N, cls.S) + math.comb(N, cls.T)
+
+    @classmethod
     def _update_class_params(cls, pars):
         cls.MAKE_OBJECT_CANONICAL, cls.S, cls.T, cls.GEN_LOCAL_SEARCH = pars
 
