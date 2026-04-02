@@ -69,7 +69,7 @@ def cpu_sink(fn, decouple=False):
 def sample_and_score(model, args, stoi, itos, env, temp, temp_span=0):
     sample_batch_size = args.gen_batch_size
     todo = args.num_samples_from_model // sample_batch_size
-    DETOK_CHUNK_SIZE = 10
+    DETOK_CHUNK_SIZE = 1
 
     results = []
     total_invalid = 0
