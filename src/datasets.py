@@ -1,6 +1,7 @@
 import os
 import pickle
 import random
+import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from itertools import repeat
 from logging import getLogger
@@ -40,7 +41,7 @@ def detokenize(data, args, env, executor=None):
 # helper functions for creating the training and test Datasets
 
 
-def generate_and_score(args, classname):
+def generate_and_score(args, classname, train_data_path=None, test_data_path=None):
     """
     Generation method if no data
     """
@@ -66,8 +67,18 @@ def generate_and_score(args, classname):
         per_batch_top_k = max(1, (pop_size * 4) // len(batch_counts))
 
     gen_log_interval = getattr(args, 'gen_log_interval', 0)
+    gen_save_interval = getattr(args, 'gen_save_interval', 600)
     last_logged = 0
+    last_saved = time.time()
     n_generated = 0
+
+    def _save():
+        nonlocal last_saved
+        if not data or train_data_path is None:
+            return
+        update_datasets(args, data, [], None, train_data_path, test_data_path)
+        logger.info(f"Checkpoint saved ({len(data)} pool items)")
+        last_saved = time.time()
 
     def _log_stats():
         nonlocal last_logged
@@ -87,6 +98,8 @@ def generate_and_score(args, classname):
             lines.append(f"  {s} x{c}")
         lines.append(f"  mean: {scores.mean():.1f} | p50: {pcts[0]:.0f} | p75: {pcts[1]:.0f} | p90: {pcts[2]:.0f} | p99: {pcts[3]:.0f}")
         logger.info("\n".join(lines))
+        if gen_save_interval > 0 and time.time() - last_saved >= gen_save_interval:
+            _save()
 
     try:
         if args.process_pool:
@@ -202,7 +215,7 @@ def load_initial_data(args, classname):
         train_set = pickle.load(open(train_data_path, "rb"))
         test_set = pickle.load(open(test_data_path, "rb"))
     else:
-        data = generate_and_score(args, classname=classname)
+        data = generate_and_score(args, classname=classname, train_data_path=train_data_path, test_data_path=test_data_path)
         test_set = []
         train_set = []
         train_set, test_set, _ = update_datasets(args, data, train_set, test_set, train_data_path, test_data_path)
