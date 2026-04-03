@@ -16,6 +16,8 @@ import pickle
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
+from tqdm import tqdm
+
 from src.envs.ramsey import RamseyDataPoint
 
 
@@ -61,7 +63,7 @@ def main():
 
     with ProcessPoolExecutor(max_workers=args.num_workers) as executor:
         futures = {executor.submit(_run_ls, t): t for t in tasks}
-        for future in as_completed(futures):
+        for future in tqdm(as_completed(futures), total=len(tasks), desc="Local search"):
             dp = future.result()
             results.append(dp)
             if dp.features not in seen:
