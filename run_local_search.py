@@ -66,10 +66,16 @@ def main():
     start_total = time.time()
 
     def _handle_sigint(sig, frame):
+        if os.getpid() != main_pid:
+            return  # ignore in worker processes
         pool.sort(key=lambda d: d.score, reverse=True)
-        _save(pool, out_path)
-        print(f"\nSaved {len(pool)} graphs to {out_path}. Exiting.")
+        if pool:
+            _save(pool, out_path)
+            print(f"\nSaved {len(pool)} graphs to {out_path}. Exiting.")
+        else:
+            print("\nNo results yet. Exiting without saving.")
         os._exit(0)
+    main_pid = os.getpid()
     signal.signal(signal.SIGINT, _handle_sigint)
 
     while not stop:
@@ -120,6 +126,22 @@ def main():
 
         _report(f"Pass {pass_num} done | added: {n_added}")
         _save(pool, out_path)
+
+        # Write top 10 DOT files
+        dot_dir = os.path.join(os.path.dirname(out_path), "ls_top_graphs")
+        os.makedirs(dot_dir, exist_ok=True)
+        for rank, dp in enumerate(pool[:10], 1):
+            path = os.path.join(dot_dir, f"rank_{rank:02d}_score_{dp.score}.dot")
+            n = dp.N
+            lines = [f"graph rank{rank} {{", f'  label="rank {rank} | score {dp.score}";']
+            for i in range(n):
+                for j in range(i + 1, n):
+                    if dp.data[i, j]:
+                        lines.append(f"  {i} -- {j};")
+            lines.append("}")
+            with open(path, "w") as f:
+                f.write("\n".join(lines) + "\n")
+        print(f"Top 10 DOT files written to {dot_dir}/")
 
     print(f"\nDone. {pass_num} passes | pool: {len(pool)} | top: {pool[0].score} → {out_path}")
 
