@@ -25,7 +25,7 @@ def _run_ls(dp_and_pars):
     dp, pars, sa_steps = dp_and_pars
     RamseyDataPoint._update_class_params(pars)
     dp = copy.deepcopy(dp)
-    dp.local_search_fast(sa_steps=sa_steps)
+    dp.local_search_fast_v2(sa_steps=sa_steps)
     return dp
 
 
