@@ -80,28 +80,30 @@ def main():
 
     while not stop:
         pass_num += 1
-        tasks = [(dp, pars, args.sa_steps) for dp in seeds]
+        current_seeds = pool if pool else seeds
+        current_seeds.sort(key=lambda d: d.score, reverse=True)
+        tasks = [(dp, pars, args.sa_steps) for dp in current_seeds]
         n_done = 0
         n_added = 0
         last_save = time.time()
         pass_start = time.time()
 
-        before_scores = {id(dp): dp.score for dp in seeds}
+        before_scores = sorted([dp.score for dp in current_seeds], reverse=True)
 
         def _report(label):
             pool.sort(key=lambda d: d.score, reverse=True)
             elapsed = time.time() - pass_start
-            print(f"\n{label} | {n_done}/{len(seeds)} | {n_done/max(elapsed,1e-9):.1f} g/s | pool: {len(pool)}")
+            print(f"\n{label} | {n_done}/{len(current_seeds)} | {n_done/max(elapsed,1e-9):.1f} g/s | pool: {len(pool)}")
             for i, dp in enumerate(pool[:10]):
-                b = sorted(before_scores.values(), reverse=True)[i] if i < len(before_scores) else "?"
+                b = before_scores[i] if i < len(before_scores) else "?"
                 change = dp.score - b if isinstance(b, int) else "?"
                 sign = f"+{change}" if isinstance(change, int) and change >= 0 else str(change)
                 print(f"  [{i+1:3d}] {b} → {dp.score}  ({sign})")
 
-        print(f"\n=== Pass {pass_num} | pool: {len(pool)} | top seed: {seeds[0].score} ===")
+        print(f"\n=== Pass {pass_num} | pool: {len(pool)} | top seed: {current_seeds[0].score} ===")
 
         with ProcessPoolExecutor(max_workers=args.num_workers) as executor:
-            futures = {executor.submit(_run_ls, t): t[0] for t in tasks}
+            futures = {executor.submit(_run_ls, t): None for t in tasks}
             for future in tqdm(as_completed(futures), total=len(tasks), desc=f"Pass {pass_num}"):
                 try:
                     dp = future.result()
