@@ -54,12 +54,27 @@ def main():
     pars = RamseyDataPoint._save_class_params()
     tasks = [(dp, pars, args.sa_steps) for dp in top]
 
+    # build a lookup from original graph features -> score for before/after comparison
+    before_by_rank = [dp.score for dp in top]
+
     results = []
     seen = set()
     unique_results = []
-    best_score = None
     n_done = 0
     start = time.time()
+
+    def _report(label):
+        unique_results.sort(key=lambda d: d.score, reverse=True)
+        elapsed = time.time() - start
+        print(f"\n{label} | {n_done}/{len(top)} done | "
+              f"{n_done/max(elapsed,1e-9):.1f} graphs/s | "
+              f"unique: {len(unique_results)}")
+        after_scores = [d.score for d in unique_results[:10]]
+        for i, after in enumerate(after_scores):
+            b = before_by_rank[i] if i < len(before_by_rank) else "?"
+            change = after - b if isinstance(b, int) else "?"
+            sign = f"+{change}" if isinstance(change, int) and change >= 0 else str(change)
+            print(f"  [{i+1:3d}] {b} → {after}  ({sign})")
 
     with ProcessPoolExecutor(max_workers=args.num_workers) as executor:
         futures = {executor.submit(_run_ls, t): t for t in tasks}
@@ -69,29 +84,11 @@ def main():
             if dp.features not in seen:
                 seen.add(dp.features)
                 unique_results.append(dp)
-            if best_score is None or dp.score > best_score:
-                best_score = dp.score
             n_done += 1
             if n_done % args.report_every == 0:
-                elapsed = time.time() - start
-                print(f"  [{n_done}/{len(top)}] "
-                      f"{n_done/elapsed:.1f} graphs/s | "
-                      f"unique so far: {len(unique_results)} | "
-                      f"best score: {best_score}")
+                _report(f"Progress")
 
-    elapsed = time.time() - start
-    unique_results.sort(key=lambda d: d.score, reverse=True)
-    before_scores = [dp.score for dp in top]
-
-    print(f"\nDone in {elapsed:.1f}s ({len(top)/elapsed:.1f} graphs/s)")
-    print(f"Starting graphs: {len(top)} → unique post-LS results: {len(unique_results)}")
-    print(f"\nTop 10 before → after:")
-    for i in range(min(10, len(unique_results))):
-        b = before_scores[i] if i < len(before_scores) else "?"
-        after = unique_results[i].score
-        change = after - b if isinstance(b, int) else "?"
-        sign = f"+{change}" if isinstance(change, int) and change >= 0 else str(change)
-        print(f"  [{i+1:3d}] {b} → {after}  ({sign})")
+    _report("Final")
 
     print(f"\nSaving {len(unique_results)} unique results to {out_path}")
     pickle.dump(unique_results, open(out_path, "wb"))
