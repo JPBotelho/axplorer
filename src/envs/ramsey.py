@@ -205,8 +205,8 @@ class RamseyDataPoint(DataPoint):
         adj_np = (self.data.astype(np.int64) @ powers)  # row dot powers = bitmask per row
         no_self = ~powers & full
         cadj_np = (~adj_np) & full & no_self
-        self.adj = list(adj_np)
-        self.cadj = list(cadj_np)
+        self.adj = adj_np.tolist()
+        self.cadj = cadj_np.tolist()
 
     def _flip_edge(self, i, j):
         if self.data[i, j]:

@@ -116,7 +116,7 @@ def _do_score(d, always_search: bool = False, redeem_only: bool = False, pars=No
     d.calc_score()
     invalid = 1 if d.score < 0 else 0
     if always_search:
-        d.local_search(improve_with_local_search=True)
+        d.local_search_fast_v2()
     elif invalid:
         if redeem_only:
             d.local_search(improve_with_local_search=False)
