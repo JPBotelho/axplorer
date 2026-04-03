@@ -89,6 +89,7 @@ def main():
     parser.add_argument("--num_workers", type=int, default=8)
     parser.add_argument("--sa_steps", type=int, default=None, help="SA steps per graph (default: N*N*10)")
     parser.add_argument("--round_size", type=int, default=1000, help="Graphs per round in continuous phase (default: 1000)")
+    parser.add_argument("--depth_mult", type=float, default=2.0, help="Multiply sa_steps each full cycle through pool (default: 2.0)")
     parser.add_argument("--save_interval", type=int, default=60, help="Save every N seconds (default: 60)")
     parser.add_argument("--report_every", type=int, default=5000, help="Print progress every N graphs (default: 5000)")
     parser.add_argument("--out", type=str, default=None)
@@ -125,32 +126,37 @@ def main():
                          args.report_every, before_scores, "Phase 1")
     print(f"\nPhase 1 done: {len(pool)} unique | top: {pool[0].score} | added: {n_added}")
 
-    # ── Phase 2: continuous rounds ───────────────────────────────────────────
+    # ── Phase 2: sliding window through pool, deeper each cycle ─────────────
+    # Each round processes an exclusive slice [cursor, cursor+round_size).
+    # When cursor wraps back to 0, sa_steps multiplies by depth_mult so
+    # subsequent cycles search deeper.
     round_num = 0
-    stale_rounds = 0  # rounds since top score improved
+    cursor = 0
+    cycle = 0
+    base_sa_steps = args.sa_steps or (initial[0].N ** 2 * 10)
+    current_sa_steps = base_sa_steps
 
     while not stop:
         round_num += 1
-        top_score_before = pool[0].score
 
-        # Broaden search after stale rounds: 1000, 2000, 4000, ... capped at pool size
-        effective_size = min(args.round_size * (2 ** stale_rounds), len(pool))
-        seeds = pool[:effective_size]
+        # Wrap cursor: start a new cycle with deeper search
+        if cursor >= len(pool):
+            cursor = 0
+            cycle += 1
+            current_sa_steps = int(base_sa_steps * (args.depth_mult ** cycle))
+            print(f"\n=== Cycle {cycle+1} begins | sa_steps now {current_sa_steps} ===")
 
-        print(f"\n=== Round {round_num} | top {effective_size} graphs | best: {pool[0].score} "
-              f"| stale: {stale_rounds} ===")
+        lo = cursor
+        hi = min(cursor + args.round_size, len(pool))
+        seeds = pool[lo:hi]
+        cursor = hi
+
+        print(f"\n=== Round {round_num} | slice [{lo}:{hi}] | sa_steps: {current_sa_steps} | best: {pool[0].score} ===")
 
         before_scores = [dp.score for dp in pool[:10]]
-        _run_batch(seeds, args.num_workers, pars, args.sa_steps,
+        _run_batch(seeds, args.num_workers, pars, current_sa_steps,
                    pool, seen, out_path, args.save_interval,
                    args.report_every, before_scores, f"Round {round_num}")
-
-        if pool[0].score > top_score_before:
-            print(f"  Top score improved: {top_score_before} → {pool[0].score}")
-            stale_rounds = 0
-        else:
-            stale_rounds += 1
-            print(f"  No top-score improvement ({stale_rounds} stale rounds, next: top {min(args.round_size * (2**(stale_rounds)), len(pool))})")
 
     print(f"\nFinal pool: {len(pool)} unique graphs | top: {pool[0].score} → {out_path}")
 
