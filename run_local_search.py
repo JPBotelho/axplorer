@@ -88,14 +88,14 @@ def main():
         last_save = time.time()
         pass_start = time.time()
 
-        before_scores = sorted([dp.score for dp in current_seeds], reverse=True)
+        original_top10 = sorted([dp.score for dp in data[:args.top_k]], reverse=True)[:10]
 
         def _report(label):
             pool.sort(key=lambda d: d.score, reverse=True)
             elapsed = time.time() - pass_start
             print(f"\n{label} | {n_done}/{len(current_seeds)} | {n_done/max(elapsed,1e-9):.1f} g/s | pool: {len(pool)}")
             for i, dp in enumerate(pool[:10]):
-                b = before_scores[i] if i < len(before_scores) else "?"
+                b = original_top10[i] if i < len(original_top10) else "?"
                 change = dp.score - b if isinstance(b, int) else "?"
                 sign = f"+{change}" if isinstance(change, int) and change >= 0 else str(change)
                 print(f"  [{i+1:3d}] {b} → {dp.score}  ({sign})")
