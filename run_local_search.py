@@ -66,17 +66,29 @@ def main():
     elapsed = time.time() - start
     results.sort(key=lambda d: d.score, reverse=True)
 
+    # Deduplicate by adjacency matrix
+    seen = set()
+    unique_results = []
+    for dp in results:
+        if dp.features not in seen:
+            seen.add(dp.features)
+            unique_results.append(dp)
+    n_dupes = len(results) - len(unique_results)
+    results = unique_results
+
     before_scores = sorted([dp.score for dp in top], reverse=True)
-    after_scores = sorted([dp.score for dp in results], reverse=True)
+    after_scores = [dp.score for dp in results]
 
     print(f"\nDone in {elapsed:.1f}s ({len(results)/elapsed:.1f} graphs/s)")
+    print(f"Duplicates removed: {n_dupes} ({len(results)} unique results)")
     print(f"\nTop 10 before → after:")
     for i in range(min(10, len(results))):
-        change = after_scores[i] - before_scores[i]
-        sign = f"+{change}" if change >= 0 else str(change)
-        print(f"  [{i+1:3d}] {before_scores[i]} → {after_scores[i]}  ({sign})")
+        b = before_scores[i] if i < len(before_scores) else "?"
+        change = after_scores[i] - b if isinstance(b, int) else "?"
+        sign = f"+{change}" if isinstance(change, int) and change >= 0 else str(change)
+        print(f"  [{i+1:3d}] {b} → {after_scores[i]}  ({sign})")
 
-    print(f"\nSaving {len(results)} results to {out_path}")
+    print(f"\nSaving {len(results)} unique results to {out_path}")
     pickle.dump(results, open(out_path, "wb"))
 
     # Write top 10 DOT files
