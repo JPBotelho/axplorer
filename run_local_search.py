@@ -79,7 +79,9 @@ def main():
         last_save = time.time()
         pass_start = time.time()
 
-        print(f"\n=== Pass {pass_num} | pool: {len(pool)} | top: {pool[0].score if pool else 'n/a'} ===")
+        print(f"\n=== Pass {pass_num} | pool: {len(pool)} ===")
+        for i, dp in enumerate(pool[:10]):
+            print(f"  [{i+1:3d}] {dp.score}")
 
         with ProcessPoolExecutor(max_workers=args.num_workers) as executor:
             futures = {executor.submit(_run_ls, t): None for t in tasks}
@@ -99,8 +101,9 @@ def main():
                 if n_done % args.report_every == 0:
                     pool.sort(key=lambda d: d.score, reverse=True)
                     elapsed = time.time() - pass_start
-                    print(f"\n  {n_done}/{len(seeds)} | {n_done/elapsed:.1f} g/s | "
-                          f"pool: {len(pool)} | top: {pool[0].score}")
+                    print(f"\n  {n_done}/{len(seeds)} | {n_done/elapsed:.1f} g/s | pool: {len(pool)}")
+                    for i, dp in enumerate(pool[:10]):
+                        print(f"    [{i+1:3d}] {dp.score}")
 
                 if time.time() - last_save >= args.save_interval:
                     pool.sort(key=lambda d: d.score, reverse=True)
@@ -111,8 +114,9 @@ def main():
         pool.sort(key=lambda d: d.score, reverse=True)
         _save(pool, out_path)
         elapsed = time.time() - pass_start
-        print(f"Pass {pass_num} done | added: {n_added} | pool: {len(pool)} | "
-              f"top: {pool[0].score} | {elapsed:.0f}s")
+        print(f"\nPass {pass_num} done | added: {n_added} | pool: {len(pool)} | {elapsed:.0f}s")
+        for i, dp in enumerate(pool[:10]):
+            print(f"  [{i+1:3d}] {dp.score}")
 
     print(f"\nDone. {pass_num} passes | pool: {len(pool)} | top: {pool[0].score} → {out_path}")
 
