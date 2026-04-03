@@ -46,8 +46,10 @@ def main():
     parser.add_argument("--pkl", required=True, help="Path to train_data.pkl (read-only)")
     parser.add_argument("--top_k", type=int, default=999999, help="Number of top graphs to run local search on (default: all)")
     parser.add_argument("--num_workers", type=int, default=8)
-    parser.add_argument("--sa_steps", type=int, default=None, help="SA steps per graph (default: N*N*10)")
-    parser.add_argument("--time_budget", type=str, default=None, help="Total wall-clock budget, e.g. '1h', '90m', '3600s'. Divides time evenly across graphs and workers.")
+    parser.add_argument("--sa_steps", type=int, default=None, help="SA steps per graph (default: N*N*10, ignored when --time_budget is set)")
+    parser.add_argument("--time_budget", type=str, default=None, help="Total wall-clock budget e.g. '1h', '90m', '3600s'. Overrides --sa_steps.")
+    parser.add_argument("--top_tier", type=int, default=100, help="Top N graphs get extra time (default: 100)")
+    parser.add_argument("--top_tier_mult", type=float, default=10.0, help="Multiplier for top-tier time budget (default: 10x)")
     parser.add_argument("--report_every", type=int, default=1000, help="Print progress every N completed graphs")
     parser.add_argument("--out", type=str, default=None, help="Output pkl path (default: <pkl_dir>/ls_results.pkl)")
     args = parser.parse_args()
@@ -64,14 +66,26 @@ def main():
 
     RamseyDataPoint._nb_warmup()
 
-    time_limit = None
+    # Build per-graph time limits when --time_budget is set.
+    # Top-tier graphs (by rank) get top_tier_mult x more time than the rest.
+    # Total wall-clock time ≈ budget: sum(limits) / num_workers = budget_s.
     if args.time_budget is not None:
         budget_s = _parse_time_budget(args.time_budget)
-        time_limit = budget_s * args.num_workers / max(1, len(top))
-        print(f"Time budget: {args.time_budget} → {time_limit:.2f}s per graph per worker")
+        n_top = min(args.top_tier, len(top))
+        n_rest = len(top) - n_top
+        m = args.top_tier_mult
+        # base_time * (n_top * m + n_rest) / workers = budget_s
+        base_time = budget_s * args.num_workers / max(1, n_top * m + n_rest)
+        top_time = base_time * m
+        time_limits = [top_time] * n_top + [base_time] * n_rest
+        sa_steps = 10 ** 9  # effectively unlimited — time_limit governs
+        print(f"Time budget: {args.time_budget} | top {n_top} graphs: {top_time:.1f}s each | rest: {base_time:.2f}s each")
+    else:
+        time_limits = [None] * len(top)
+        sa_steps = args.sa_steps
 
     pars = RamseyDataPoint._save_class_params()
-    tasks = [(dp, pars, args.sa_steps, time_limit) for dp in top]
+    tasks = [(dp, pars, sa_steps, tl) for dp, tl in zip(top, time_limits)]
 
     # build a lookup from original graph features -> score for before/after comparison
     before_by_rank = [dp.score for dp in top]
