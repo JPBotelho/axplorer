@@ -66,9 +66,10 @@ def main():
     start_total = time.time()
 
     def _handle_sigint(sig, frame):
-        nonlocal stop
-        print("\nCtrl+C — finishing current pass then saving...")
-        stop = True
+        pool.sort(key=lambda d: d.score, reverse=True)
+        _save(pool, out_path)
+        print(f"\nSaved {len(pool)} graphs to {out_path}. Exiting.")
+        os._exit(0)
     signal.signal(signal.SIGINT, _handle_sigint)
 
     while not stop:
