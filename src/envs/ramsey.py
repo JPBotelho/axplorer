@@ -8,6 +8,7 @@ Local search: greedy hill climbing + simulated annealing.
 """
 
 import math
+import time
 import numpy as np
 
 from src.envs.environment import BaseEnvironment, DataPoint
@@ -392,7 +393,7 @@ class RamseyDataPoint(DataPoint):
 
         self.calc_features()
 
-    def local_search_fast_v2(self, sa_steps=None):
+    def local_search_fast_v2(self, sa_steps=None, time_limit=None):
         """
         Delta-based local search: uses _nb_score_delta instead of full recompute per step.
         Expected ~20-50x faster than local_search_fast for large N.
@@ -449,9 +450,12 @@ class RamseyDataPoint(DataPoint):
         cooling = (T_min / T) ** (1.0 / max(1, sa_steps))
         rng = np.random.default_rng()
         n_pairs = len(all_pairs)
+        deadline = (time.monotonic() + time_limit) if time_limit is not None else None
 
-        for _ in range(sa_steps):
+        for step in range(sa_steps):
             if self.score == max_score:
+                break
+            if deadline is not None and (step & 0xFFF) == 0 and time.monotonic() >= deadline:
                 break
             T *= cooling
             i, j = all_pairs[int(rng.integers(n_pairs))]

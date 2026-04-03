@@ -21,11 +21,23 @@ from tqdm import tqdm
 from src.envs.ramsey import RamseyDataPoint
 
 
+def _parse_time_budget(s):
+    """Parse time budget string like '1h', '90m', '3600s', or plain seconds."""
+    s = s.strip()
+    if s.endswith('h'):
+        return float(s[:-1]) * 3600
+    if s.endswith('m'):
+        return float(s[:-1]) * 60
+    if s.endswith('s'):
+        return float(s[:-1])
+    return float(s)
+
+
 def _run_ls(dp_and_pars):
-    dp, pars, sa_steps = dp_and_pars
+    dp, pars, sa_steps, time_limit = dp_and_pars
     RamseyDataPoint._update_class_params(pars)
     dp = copy.deepcopy(dp)
-    dp.local_search_fast_v2(sa_steps=sa_steps)
+    dp.local_search_fast_v2(sa_steps=sa_steps, time_limit=time_limit)
     return dp
 
 
@@ -35,6 +47,7 @@ def main():
     parser.add_argument("--top_k", type=int, default=999999, help="Number of top graphs to run local search on (default: all)")
     parser.add_argument("--num_workers", type=int, default=8)
     parser.add_argument("--sa_steps", type=int, default=None, help="SA steps per graph (default: N*N*10)")
+    parser.add_argument("--time_budget", type=str, default=None, help="Total wall-clock budget, e.g. '1h', '90m', '3600s'. Divides time evenly across graphs and workers.")
     parser.add_argument("--report_every", type=int, default=1000, help="Print progress every N completed graphs")
     parser.add_argument("--out", type=str, default=None, help="Output pkl path (default: <pkl_dir>/ls_results.pkl)")
     args = parser.parse_args()
@@ -51,8 +64,14 @@ def main():
 
     RamseyDataPoint._nb_warmup()
 
+    time_limit = None
+    if args.time_budget is not None:
+        budget_s = _parse_time_budget(args.time_budget)
+        time_limit = budget_s * args.num_workers / max(1, len(top))
+        print(f"Time budget: {args.time_budget} → {time_limit:.2f}s per graph per worker")
+
     pars = RamseyDataPoint._save_class_params()
-    tasks = [(dp, pars, args.sa_steps) for dp in top]
+    tasks = [(dp, pars, args.sa_steps, time_limit) for dp in top]
 
     # build a lookup from original graph features -> score for before/after comparison
     before_by_rank = [dp.score for dp in top]
