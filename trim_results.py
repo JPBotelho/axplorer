@@ -11,7 +11,7 @@ parser.add_argument("--top_k", type=int, default=100000)
 parser.add_argument("--out", type=str, default=None)
 args = parser.parse_args()
 
-out = args.out or args.pkl.replace(".pkl", f"_trimmed.pkl.gz")
+out = args.out or args.pkl.replace(".pkl", f"_trimmed.pkl")
 
 print(f"Loading {args.pkl} ...")
 file_size = os.path.getsize(args.pkl)
@@ -34,8 +34,7 @@ with open(args.pkl, "rb") as f:
 data.sort(key=lambda d: d.score, reverse=True)
 top = data[:args.top_k]
 
-with gzip.open(out, "wb") as f:
-    pickle.dump(top, f)
+pickle.dump(top, open(out, "wb"))
 
 print(f"Saved {len(top)} graphs to {out}")
 print(f"Score range: {top[-1].score} – {top[0].score}")
