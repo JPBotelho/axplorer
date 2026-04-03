@@ -80,12 +80,22 @@ def main():
         last_save = time.time()
         pass_start = time.time()
 
-        print(f"\n=== Pass {pass_num} | pool: {len(pool)} ===")
-        for i, dp in enumerate(pool[:10]):
-            print(f"  [{i+1:3d}] {dp.score}")
+        before_scores = {id(dp): dp.score for dp in seeds}
+
+        def _report(label):
+            pool.sort(key=lambda d: d.score, reverse=True)
+            elapsed = time.time() - pass_start
+            print(f"\n{label} | {n_done}/{len(seeds)} | {n_done/max(elapsed,1e-9):.1f} g/s | pool: {len(pool)}")
+            for i, dp in enumerate(pool[:10]):
+                b = sorted(before_scores.values(), reverse=True)[i] if i < len(before_scores) else "?"
+                change = dp.score - b if isinstance(b, int) else "?"
+                sign = f"+{change}" if isinstance(change, int) and change >= 0 else str(change)
+                print(f"  [{i+1:3d}] {b} → {dp.score}  ({sign})")
+
+        print(f"\n=== Pass {pass_num} | pool: {len(pool)} | top seed: {seeds[0].score} ===")
 
         with ProcessPoolExecutor(max_workers=args.num_workers) as executor:
-            futures = {executor.submit(_run_ls, t): None for t in tasks}
+            futures = {executor.submit(_run_ls, t): t[0] for t in tasks}
             for future in tqdm(as_completed(futures), total=len(tasks), desc=f"Pass {pass_num}"):
                 try:
                     dp = future.result()
@@ -100,11 +110,7 @@ def main():
                 n_done += 1
 
                 if n_done % args.report_every == 0:
-                    pool.sort(key=lambda d: d.score, reverse=True)
-                    elapsed = time.time() - pass_start
-                    print(f"\n  {n_done}/{len(seeds)} | {n_done/elapsed:.1f} g/s | pool: {len(pool)}")
-                    for i, dp in enumerate(pool[:10]):
-                        print(f"    [{i+1:3d}] {dp.score}")
+                    _report("Progress")
 
                 if time.time() - last_save >= args.save_interval:
                     pool.sort(key=lambda d: d.score, reverse=True)
@@ -112,12 +118,8 @@ def main():
                     last_save = time.time()
                     print(f"  [saved | pool: {len(pool)} | top: {pool[0].score}]")
 
-        pool.sort(key=lambda d: d.score, reverse=True)
+        _report(f"Pass {pass_num} done | added: {n_added}")
         _save(pool, out_path)
-        elapsed = time.time() - pass_start
-        print(f"\nPass {pass_num} done | added: {n_added} | pool: {len(pool)} | {elapsed:.0f}s")
-        for i, dp in enumerate(pool[:10]):
-            print(f"  [{i+1:3d}] {dp.score}")
 
     print(f"\nDone. {pass_num} passes | pool: {len(pool)} | top: {pool[0].score} → {out_path}")
 
