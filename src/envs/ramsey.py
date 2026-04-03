@@ -70,6 +70,43 @@ if _NUMBA:
         all_mask = (np.int64(1) << np.int64(n)) - np.int64(1)
         return _nb_clique_rec(adj, all_mask, np.int64(0), s64)
 
+    @_njit(cache=True)
+    def _nb_count_cliques_through_edge(adj, i, j, s):
+        """Count K_s cliques containing edge (i,j). adj must already contain that edge."""
+        if s <= np.int64(1):
+            return np.int64(0)
+        if s == np.int64(2):
+            return np.int64(1)
+        ij_mask = (np.int64(1) << i) | (np.int64(1) << j)
+        common = adj[i] & adj[j] & ~ij_mask
+        if s == np.int64(3):
+            return _nb_popcount(common)
+        return _nb_clique_rec(adj, common, np.int64(0), s - np.int64(2))
+
+    @_njit(cache=True)
+    def _nb_score_delta(adj, cadj, i, j, s, t):
+        """Exact score delta for flipping edge (i,j). Positive means improvement."""
+        bit_i = np.int64(1) << i
+        bit_j = np.int64(1) << j
+        if (adj[i] >> j) & np.int64(1):
+            # Edge exists → removing it loses ks cliques, gains kt cliques in complement
+            ks = _nb_count_cliques_through_edge(adj, i, j, s)
+            cadj[i] |= bit_j
+            cadj[j] |= bit_i
+            kt = _nb_count_cliques_through_edge(cadj, i, j, t)
+            cadj[i] ^= bit_j
+            cadj[j] ^= bit_i
+            return ks - kt
+        else:
+            # No edge → adding it gains ks cliques, loses kt cliques in complement
+            adj[i] |= bit_j
+            adj[j] |= bit_i
+            ks = _nb_count_cliques_through_edge(adj, i, j, s)
+            adj[i] ^= bit_j
+            adj[j] ^= bit_i
+            kt = _nb_count_cliques_through_edge(cadj, i, j, t)
+            return kt - ks
+
 
 def _popcount(x):
     return bin(x).count('1')
@@ -355,6 +392,76 @@ class RamseyDataPoint(DataPoint):
 
         self.calc_features()
 
+    def local_search_fast_v2(self, sa_steps=None):
+        """
+        Delta-based local search: uses _nb_score_delta instead of full recompute per step.
+        Expected ~20-50x faster than local_search_fast for large N.
+        """
+        if not _NUMBA:
+            self.local_search(improve_with_local_search=True)
+            return
+
+        n = self.N
+        s = self.__class__.S
+        t = self.__class__.T
+        s64 = np.int64(s)
+        t64 = np.int64(t)
+        max_score = math.comb(n, s) + math.comb(n, t)
+        self._sync_from_data()
+
+        adj_arr = np.array(self.adj, dtype=np.int64)
+        cadj_arr = np.array(self.cadj, dtype=np.int64)
+
+        self.score = max_score - int(_nb_count_ks_cliques(adj_arr, n, s)) - int(_nb_count_ks_cliques(cadj_arr, n, t))
+        if self.score == max_score:
+            return
+
+        all_pairs = [(i, j) for i in range(n) for j in range(i + 1, n)]
+
+        def _flip(i, j):
+            self._flip_edge(i, j)
+            adj_arr[i] = self.adj[i]; adj_arr[j] = self.adj[j]
+            cadj_arr[i] = self.cadj[i]; cadj_arr[j] = self.cadj[j]
+
+        # Phase 1: greedy hill climbing (no full recompute needed)
+        improved = True
+        while improved and self.score < max_score:
+            improved = False
+            for (i, j) in all_pairs:
+                delta = int(_nb_score_delta(adj_arr, cadj_arr, np.int64(i), np.int64(j), s64, t64))
+                if delta > 0:
+                    _flip(i, j)
+                    self.score += delta
+                    improved = True
+                    if self.score == max_score:
+                        break
+
+        if self.score == max_score:
+            self.calc_features()
+            return
+
+        # Phase 2: simulated annealing
+        if sa_steps is None:
+            sa_steps = n * n * 10
+        violations = max_score - self.score
+        T = max(0.5, violations * 0.1)
+        T_min = 0.01
+        cooling = (T_min / T) ** (1.0 / max(1, sa_steps))
+        rng = np.random.default_rng()
+        n_pairs = len(all_pairs)
+
+        for _ in range(sa_steps):
+            if self.score == max_score:
+                break
+            T *= cooling
+            i, j = all_pairs[int(rng.integers(n_pairs))]
+            delta = int(_nb_score_delta(adj_arr, cadj_arr, np.int64(i), np.int64(j), s64, t64))
+            if delta > 0 or (T > T_min and rng.random() < math.exp(delta / T)):
+                _flip(i, j)
+                self.score += delta
+
+        self.calc_features()
+
     @classmethod
     def max_possible_score(cls, N):
         return math.comb(N, cls.S) + math.comb(N, cls.T)
@@ -369,6 +476,10 @@ class RamseyDataPoint(DataPoint):
         dummy[1] = 0b100001
         _nb_count_ks_cliques(dummy, 6, cls.S)
         _nb_count_ks_cliques(dummy, 6, cls.T)
+        cdummy = np.zeros(6, dtype=np.int64)
+        cdummy[0] = ~dummy[0] & np.int64((1 << 6) - 1)
+        cdummy[1] = ~dummy[1] & np.int64((1 << 6) - 1)
+        _nb_score_delta(dummy, cdummy, np.int64(0), np.int64(1), np.int64(cls.S), np.int64(cls.T))
 
     @classmethod
     def _update_class_params(cls, pars):
