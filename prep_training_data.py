@@ -18,6 +18,7 @@ import random
 parser = argparse.ArgumentParser()
 parser.add_argument("--pkl", required=True)
 parser.add_argument("--dump_path", required=True)
+parser.add_argument("--top_k", type=int, default=None, help="Keep only top K graphs before splitting")
 parser.add_argument("--ntest", type=int, default=1000)
 args = parser.parse_args()
 
@@ -29,7 +30,9 @@ with opener(args.pkl, "rb") as f:
     data = pickle.load(f)
 
 data.sort(key=lambda d: d.score, reverse=True)
-print(f"Loaded {len(data)} graphs | top: {data[0].score} | bottom: {data[-1].score}")
+if args.top_k and len(data) > args.top_k:
+    data = data[:args.top_k]
+print(f"Keeping {len(data)} graphs | top: {data[0].score} | bottom: {data[-1].score}")
 
 random.shuffle(data)
 test = data[:args.ntest]
