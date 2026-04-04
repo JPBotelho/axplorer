@@ -62,7 +62,7 @@ def _kill_executor(executor):
     executor.shutdown(wait=False, cancel_futures=True)
 
 
-def run_background_cpu_work(classname, pool, args, stop_event):
+def run_background_cpu_work(classname, pool, args, stop_event, max_score=None):
     """
     Run random generation and local search on CPU while GPU trains.
     Returns (generated_graphs, ls_improved_graphs).
@@ -153,6 +153,10 @@ def run_background_cpu_work(classname, pool, args, stop_event):
                 n_pass += 1
                 with data_lock:
                     all_candidates = list(pool) + list(ls_results)
+                # If all graphs are already at max score, nothing to improve
+                if max_score is not None and all(d.score >= max_score for d in all_candidates):
+                    logger.info(f"[BG-LS] All graphs at max score, stopping.")
+                    break
                 top_pool = sorted(all_candidates, key=lambda d: d.score, reverse=True)[:min(len(all_candidates), 5000)]
                 tasks = [(copy.deepcopy(dp), pars, sa_steps) for dp in top_pool]
 
@@ -440,14 +444,19 @@ if __name__ == "__main__":
             bg_result = [None]  # mutable container for thread result
 
             def _bg_wrapper():
-                bg_result[0] = run_background_cpu_work(classname, train_set, args, bg_stop)
+                bg_result[0] = run_background_cpu_work(classname, train_set, args, bg_stop, max_score=classname.max_possible_score(args.N))
 
             bg_thread = threading.Thread(target=_bg_wrapper, name="bg-cpu", daemon=True)
             bg_thread.start()
             logger.info(f"[BG] Started background CPU work (gen={args.bg_generation}, ls={args.bg_local_search})")
 
         batch_loader = InfiniteDataLoader(train_dataset, batch_size=args.batch_size, pin_memory=True, num_workers=min(31, args.num_workers))
-        best_loss = train(model, args, batch_loader, optimizer, test_dataset, current_best_loss=best_loss)
+        try:
+            best_loss = train(model, args, batch_loader, optimizer, test_dataset, current_best_loss=best_loss)
+        except KeyboardInterrupt:
+            if bg_use:
+                bg_stop.set()
+            raise
         log_resources(f"Epoch {epoch} AFTER_TRAIN")
         force_release_memory()
 
