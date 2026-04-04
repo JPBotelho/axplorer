@@ -716,8 +716,11 @@ if __name__ == "__main__":
             if not data:
                 logger.info(f"[SOURCE] {name}: 0 graphs")
                 return
+            from collections import Counter
             scores = [d.score for d in data]
             logger.info(f"[SOURCE] {name}: {len(scores)} graphs | max={max(scores)} | mean={sum(scores)/len(scores):.1f}")
+            for score, count in sorted(Counter(scores).items()):
+                logger.info(f"[SOURCE] {name} | Score {score}: Count: {count}")
         _log_source("transformer", new_data)
         _log_source("bg-ls", bg_ls_improved)
 
