@@ -40,10 +40,11 @@ def run_background_cpu_work(classname, pool, args, stop_event):
     ls_results = []
     seen_features = {d.features for d in pool}
 
-    # Compute score thresholds for alerts
+    # Compute score thresholds for alerts (mutable so they update as better graphs are found)
     pool_scores = sorted([d.score for d in pool], reverse=True)
     p90_threshold = pool_scores[len(pool_scores) // 10] if pool_scores else 0
-    top10_min = pool_scores[9] if len(pool_scores) >= 10 else (pool_scores[-1] if pool_scores else 0)
+    top10_scores = pool_scores[:10] if len(pool_scores) >= 10 else pool_scores[:]
+    alert_lock = threading.Lock()
 
     n_workers_gen = args.bg_workers_gen or args.num_workers // 2
     n_workers_ls = args.bg_workers_ls or args.num_workers // 2
@@ -76,8 +77,12 @@ def run_background_cpu_work(classname, pool, args, stop_event):
                             if dp.features not in seen_features:
                                 seen_features.add(dp.features)
                                 generated.append(dp)
-                                if dp.score >= p90_threshold:
-                                    print(f"[BG-GEN] TOP 10% GRAPH! score={dp.score} (pool p90={p90_threshold})")
+                                with alert_lock:
+                                    if dp.score > top10_scores[-1]:
+                                        top10_scores.append(dp.score)
+                                        top10_scores.sort(reverse=True)
+                                        del top10_scores[10:]
+                                        print(f"[BG-GEN] NEW TOP-10! score={dp.score} (top10 min={top10_scores[-1]})")
                     n_gen += batch_size
                     # Submit replacement task
                     if not stop_event.is_set():
@@ -120,8 +125,12 @@ def run_background_cpu_work(classname, pool, args, stop_event):
                 if dp.features not in seen_features:
                     seen_features.add(dp.features)
                     ls_results.append(dp)
-                    if dp.score > top10_min:
-                        print(f"[BG-LS]  NEW TOP-10 GRAPH! score={dp.score} (prev top-10 min={top10_min})")
+                    with alert_lock:
+                        if dp.score > top10_scores[-1]:
+                            top10_scores.append(dp.score)
+                            top10_scores.sort(reverse=True)
+                            del top10_scores[10:]
+                            print(f"[BG-LS]  NEW TOP-10! score={dp.score} (top10 min={top10_scores[-1]})")
                 n_done += 1
 
             # Cancel remaining if stopped early
