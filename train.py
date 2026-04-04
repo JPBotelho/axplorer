@@ -711,6 +711,21 @@ if __name__ == "__main__":
         elif args.device == "mps":
             torch.mps.empty_cache()
 
+        # Deep LS on top 100 transformer samples
+        top_transformer = sorted(new_data, key=lambda d: d.score, reverse=True)[:100]
+        pars = classname._save_class_params()
+        bg_mult = args.ls_sa_mult_bg if args.ls_sa_mult_bg > 0 else args.ls_sa_mult
+        elite_sa_steps = args.N * args.N * bg_mult * 10
+        elite_explored = []
+        with ProcessPoolExecutor(max_workers=min(16, args.num_workers)) as executor:
+            futures = {executor.submit(_run_ls, (copy.deepcopy(dp), pars, elite_sa_steps)): dp for dp in top_transformer}
+            for future in tqdm(as_completed(futures), total=len(futures), desc="Exploring Top 100"):
+                try:
+                    dp = future.result()
+                    elite_explored.append(dp)
+                except Exception as e:
+                    print(f"[EXPLORE] Worker error: {e}", file=sys.stderr)
+
         # Log separate stats before merging
         def _log_source(name, data):
             if not data:
@@ -722,10 +737,11 @@ if __name__ == "__main__":
             for score, count in sorted(Counter(scores).items()):
                 logger.info(f"[SOURCE] {name} | Score {score}: Count: {count}")
         _log_source("transformer", new_data)
+        _log_source("transformer-elite", elite_explored)
         _log_source("bg-ls", bg_ls_improved)
 
         # Merge model samples with background CPU results
-        all_new_data = new_data + bg_generated + bg_ls_improved
+        all_new_data = new_data + bg_generated + bg_ls_improved + elite_explored
         train_set, test_set, inc_temp = update_datasets(args, all_new_data, train_set, test_set, train_data_path, test_data_path)
         log_resources(f"Epoch {epoch} AFTER_UPDATE_DATASETS")
         force_release_memory()
