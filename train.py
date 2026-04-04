@@ -32,6 +32,29 @@ def _run_ls(dp_and_pars):
     return dp
 
 
+def _run_targeted_ls(dp_and_pars):
+    """Flip the worst clique-causing edges, then run LS. Targeted escape from local minima."""
+    dp, pars, sa_steps, n_flip = dp_and_pars
+    dp.__class__._update_class_params(pars)
+    dp = copy.deepcopy(dp)
+    n = dp.N
+    # Score delta for every edge: most negative = most involved in cliques
+    deltas = []
+    for i in range(n):
+        for j in range(i + 1, n):
+            deltas.append((dp._score_delta_for_flip(i, j), i, j))
+    deltas.sort()  # ascending: worst edges first
+    # Flip a random subset of the worst n_flip edges
+    worst = deltas[:max(n_flip * 2, 10)]
+    chosen = [worst[k] for k in np.random.choice(len(worst), size=min(n_flip, len(worst)), replace=False)]
+    for _, i, j in chosen:
+        dp._flip_edge(i, j)
+    dp.calc_score()
+    dp.calc_features()
+    dp.local_search_fast_v2(sa_steps=sa_steps)
+    return dp
+
+
 def _kill_executor(executor):
     """Shut down executor quickly without leaving zombies."""
     import signal
@@ -92,11 +115,12 @@ def run_background_cpu_work(classname, pool, args, stop_event, max_score=None):
     else:
         n_workers_gen = 0
         n_workers_ls = args.bg_workers_ls or max_bg_workers
-    # Reserve cores for elite search if LS is enabled
+    # Reserve cores for elite and targeted search if LS is enabled
     n_elite_workers = args.bg_workers_elite if args.bg_workers_elite > 0 else 4
-    if args.bg_local_search and n_workers_ls > n_elite_workers:
-        n_workers_ls -= n_elite_workers
-    logger.info(f"[BG] Using {n_workers_gen} gen + {n_workers_ls} LS + {n_elite_workers} elite workers (of {args.num_workers} total)")
+    n_targeted_workers = 2
+    if args.bg_local_search and n_workers_ls > n_elite_workers + n_targeted_workers:
+        n_workers_ls -= (n_elite_workers + n_targeted_workers)
+    logger.info(f"[BG] Using {n_workers_gen} gen + {n_workers_ls} LS + {n_elite_workers} elite + {n_targeted_workers} targeted workers (of {args.num_workers} total)")
 
     def _run_generation():
         if not args.bg_generation or n_workers_gen < 1:
@@ -257,14 +281,64 @@ def run_background_cpu_work(classname, pool, args, stop_event, max_score=None):
             _kill_executor(executor)
         logger.info(f"[BG-ELITE] Finished: {n_done} total searched")
 
+    def _run_targeted_search():
+        """2 cores dedicated to flipping worst clique edges then running LS."""
+        pars = classname._save_class_params()
+        sa_steps = args.N * args.N * args.ls_sa_mult * 10
+        n_flip = max(2, args.N // 10)  # flip ~10% of N worst edges
+        n_done = 0
+
+        executor = ProcessPoolExecutor(max_workers=n_targeted_workers)
+        try:
+            pending = set()
+            for _ in range(n_targeted_workers * 2):
+                if stop_event.is_set():
+                    break
+                with data_lock:
+                    all_candidates = list(pool) + list(ls_results)
+                if not all_candidates:
+                    break
+                elite = sorted(all_candidates, key=lambda d: d.score, reverse=True)[:100]
+                dp = copy.deepcopy(elite[np.random.randint(len(elite))])
+                pending.add(executor.submit(_run_targeted_ls, (dp, pars, sa_steps, n_flip)))
+
+            while pending and not stop_event.is_set():
+                done, pending = _wait_any(pending, timeout=0.5)
+                for future in done:
+                    try:
+                        dp = future.result()
+                    except Exception as e:
+                        print(f"[BG-TARGETED] Worker error: {e}", file=sys.stderr)
+                        continue
+                    with data_lock:
+                        if dp.features not in seen_features:
+                            seen_features.add(dp.features)
+                            ls_results.append(dp)
+                            if dp.score > top10_scores[-1]:
+                                top10_scores.append(dp.score)
+                                top10_scores.sort(reverse=True)
+                                del top10_scores[10:]
+                                print(f"[BG-TARGETED] NEW TOP-10! score={dp.score}{gap(dp.score)} (top10 min={top10_scores[-1]})")
+                    n_done += 1
+                    if not stop_event.is_set():
+                        with data_lock:
+                            all_candidates = list(pool) + list(ls_results)
+                        elite = sorted(all_candidates, key=lambda d: d.score, reverse=True)[:100]
+                        dp = copy.deepcopy(elite[np.random.randint(len(elite))])
+                        pending.add(executor.submit(_run_targeted_ls, (dp, pars, sa_steps, n_flip)))
+        finally:
+            _kill_executor(executor)
+        logger.info(f"[BG-TARGETED] Finished: {n_done} total searched")
+
     # Run generation and LS in separate threads (each manages its own ProcessPoolExecutor)
     threads = []
     if args.bg_generation:
         t = threading.Thread(target=_run_generation, name="bg-gen")
         threads.append(t)
     if args.bg_local_search:
-        # Reserve 4 cores for elite search from the LS allocation
         t = threading.Thread(target=_run_elite_search, name="bg-elite")
+        threads.append(t)
+        t = threading.Thread(target=_run_targeted_search, name="bg-targeted")
         threads.append(t)
         t = threading.Thread(target=_run_local_search, name="bg-ls")
         threads.append(t)
