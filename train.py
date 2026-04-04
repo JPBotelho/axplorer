@@ -89,7 +89,10 @@ def run_background_cpu_work(classname, pool, args, stop_event):
     else:
         n_workers_gen = 0
         n_workers_ls = args.bg_workers_ls or max_bg_workers
-    logger.info(f"[BG] Using {n_workers_gen} gen + {n_workers_ls} LS workers (of {args.num_workers} total)")
+    # Reserve 4 cores for elite search if LS is enabled
+    if args.bg_local_search and n_workers_ls > 4:
+        n_workers_ls -= 4
+    logger.info(f"[BG] Using {n_workers_gen} gen + {n_workers_ls} LS + 4 elite workers (of {args.num_workers} total)")
 
     def _run_generation():
         if not args.bg_generation or n_workers_gen < 1:
@@ -188,12 +191,70 @@ def run_background_cpu_work(classname, pool, args, stop_event):
 
         logger.info(f"[BG-LS] Finished: {n_pass} passes, {n_done} searched, {len(ls_results)} unique improved")
 
+    def _run_elite_search():
+        """Dedicate 4 cores to continuously searching graphs with the top 5 distinct scores."""
+        pars = classname._save_class_params()
+        sa_steps = args.N * args.N * args.ls_sa_mult * 10  # 10x more SA effort for elite
+        n_done = 0
+        n_elite_workers = 4
+
+        executor = ProcessPoolExecutor(max_workers=n_elite_workers)
+        try:
+            while not stop_event.is_set():
+                # Get graphs with top 5 distinct scores
+                with data_lock:
+                    all_candidates = list(pool) + list(ls_results)
+                scores_desc = sorted(set(d.score for d in all_candidates), reverse=True)
+                top5_scores = set(scores_desc[:5])
+                elite = [d for d in all_candidates if d.score in top5_scores]
+                tasks = [(copy.deepcopy(dp), pars, sa_steps) for dp in elite]
+
+                if not tasks:
+                    if stop_event.wait(1.0):
+                        break
+                    continue
+
+                task_iter = iter(tasks)
+                pending = set()
+                for t in itertools.islice(task_iter, n_elite_workers * 2):
+                    pending.add(executor.submit(_run_ls, t))
+
+                while pending and not stop_event.is_set():
+                    done, pending = _wait_any(pending, timeout=0.5)
+                    for future in done:
+                        try:
+                            dp = future.result()
+                        except Exception as e:
+                            print(f"[BG-ELITE] Worker error: {e}", file=sys.stderr)
+                            continue
+                        with data_lock:
+                            if dp.features not in seen_features:
+                                seen_features.add(dp.features)
+                                ls_results.append(dp)
+                                if dp.score > top10_scores[-1]:
+                                    top10_scores.append(dp.score)
+                                    top10_scores.sort(reverse=True)
+                                    del top10_scores[10:]
+                                    print(f"[BG-ELITE] NEW TOP-10! score={dp.score} (top10 min={top10_scores[-1]})")
+                        n_done += 1
+                        t = next(task_iter, None)
+                        if t is not None and not stop_event.is_set():
+                            pending.add(executor.submit(_run_ls, t))
+
+                logger.info(f"[BG-ELITE] Pass done: {n_done} searched, elite pool size={len(elite)}")
+        finally:
+            _kill_executor(executor)
+        logger.info(f"[BG-ELITE] Finished: {n_done} total searched")
+
     # Run generation and LS in separate threads (each manages its own ProcessPoolExecutor)
     threads = []
     if args.bg_generation:
         t = threading.Thread(target=_run_generation, name="bg-gen")
         threads.append(t)
     if args.bg_local_search:
+        # Reserve 4 cores for elite search from the LS allocation
+        t = threading.Thread(target=_run_elite_search, name="bg-elite")
+        threads.append(t)
         t = threading.Thread(target=_run_local_search, name="bg-ls")
         threads.append(t)
 
