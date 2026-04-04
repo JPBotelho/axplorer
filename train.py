@@ -712,7 +712,7 @@ if __name__ == "__main__":
             torch.mps.empty_cache()
 
         # Deep LS on top 100 transformer samples
-        top_transformer = sorted(new_data, key=lambda d: d.score, reverse=True)[:100]
+        top_transformer = sorted(new_data, key=lambda d: d.score, reverse=True)[:1000]
         pars = classname._save_class_params()
         bg_mult = args.ls_sa_mult_bg if args.ls_sa_mult_bg > 0 else args.ls_sa_mult
         elite_sa_steps = args.N * args.N * bg_mult * 100
