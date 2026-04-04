@@ -448,7 +448,9 @@ if __name__ == "__main__":
             bg_thread.start()
             logger.info(f"[BG] Started background CPU work (gen={args.bg_generation}, ls={args.bg_local_search})")
 
-        batch_loader = InfiniteDataLoader(train_dataset, batch_size=args.batch_size, pin_memory=True, num_workers=min(31, args.num_workers))
+        # When bg workers are running, reserve cores for them; dataloader needs fewer workers
+        dl_workers = max(1, args.num_workers // 4) if bg_use else min(31, args.num_workers)
+        batch_loader = InfiniteDataLoader(train_dataset, batch_size=args.batch_size, pin_memory=True, num_workers=dl_workers)
         try:
             best_loss = train(model, args, batch_loader, optimizer, test_dataset, current_best_loss=best_loss)
         except KeyboardInterrupt:
