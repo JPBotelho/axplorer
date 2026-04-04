@@ -31,6 +31,17 @@ def _run_ls(dp_and_pars):
     return dp
 
 
+def _kill_executor(executor):
+    """Force-kill all worker processes in an executor, then shutdown."""
+    import signal
+    for pid in list(executor._processes.keys()):
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except (ProcessLookupError, OSError):
+            pass
+    executor.shutdown(wait=True, cancel_futures=True)
+
+
 def run_background_cpu_work(classname, pool, args, stop_event):
     """
     Run random generation and local search on CPU while GPU trains.
@@ -95,7 +106,7 @@ def run_background_cpu_work(classname, pool, args, stop_event):
                         except RuntimeError:
                             break
         finally:
-            executor.shutdown(wait=True, cancel_futures=True)
+            _kill_executor(executor)
         logger.info(f"[BG-GEN] Finished: {n_gen} generated, {len(generated)} unique kept")
 
     def _run_local_search():
@@ -137,7 +148,7 @@ def run_background_cpu_work(classname, pool, args, stop_event):
 
                 logger.info(f"[BG-LS] Pass {n_pass} done: {n_done} total searched, {len(ls_results)} unique improved")
         finally:
-            executor.shutdown(wait=True, cancel_futures=True)
+            _kill_executor(executor)
 
         logger.info(f"[BG-LS] Finished: {n_pass} passes, {n_done} searched, {len(ls_results)} unique improved")
 
