@@ -152,6 +152,10 @@ def run_background_cpu_work(classname, pool, args, stop_event, max_score=None):
             while not stop_event.is_set():
                 n_pass += 1
                 with data_lock:
+                    # Cap ls_results to avoid unbounded growth slowing down each pass
+                    if len(ls_results) > 5000:
+                        ls_results.sort(key=lambda d: d.score, reverse=True)
+                        del ls_results[5000:]
                     all_candidates = list(pool) + list(ls_results)
                 # If all graphs are already at max score, nothing to improve
                 if max_score is not None and all(d.score >= max_score for d in all_candidates):
