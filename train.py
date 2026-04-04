@@ -711,6 +711,16 @@ if __name__ == "__main__":
         elif args.device == "mps":
             torch.mps.empty_cache()
 
+        # Log separate stats before merging
+        def _log_source(name, data):
+            if not data:
+                logger.info(f"[SOURCE] {name}: 0 graphs")
+                return
+            scores = [d.score for d in data]
+            logger.info(f"[SOURCE] {name}: {len(scores)} graphs | max={max(scores)} | mean={sum(scores)/len(scores):.1f}")
+        _log_source("transformer", new_data)
+        _log_source("bg-ls", bg_ls_improved)
+
         # Merge model samples with background CPU results
         all_new_data = new_data + bg_generated + bg_ls_improved
         train_set, test_set, inc_temp = update_datasets(args, all_new_data, train_set, test_set, train_data_path, test_data_path)
