@@ -105,7 +105,12 @@ def do_stats(n_invalid, data):
     logger.info(f"### Score distribution ###")
     if n_invalid >= 0:
         logger.info(f"Invalid examples: before local search: {n_invalid}, after: {len(data) - len(scores)}")
-    return compute_stats(scores)
+    stats = compute_stats(scores)
+    if stats is not None and scores:
+        max_possible = data[0].max_possible_score(data[0].N) if data else None
+        if max_possible is not None:
+            logger.info(f"Gap to perfect: {max_possible - stats['max']} (best={stats['max']}, perfect={max_possible})")
+    return stats
 
 
 def _do_score(d, always_search: bool = False, redeem_only: bool = False, pars=None, sa_steps=None):

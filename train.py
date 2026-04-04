@@ -72,6 +72,9 @@ def run_background_cpu_work(classname, pool, args, stop_event, max_score=None):
     seen_features = {d.features for d in pool}
     data_lock = threading.Lock()  # protects seen_features, generated, ls_results, top10_scores
 
+    def gap(score):
+        return f" (gap={max_score - score})" if max_score is not None else ""
+
     # Compute score thresholds for alerts (mutable so they update as better graphs are found)
     pool_scores = sorted([d.score for d in pool], reverse=True)
     top10_scores = pool_scores[:10] if len(pool_scores) >= 10 else pool_scores[:]
@@ -127,7 +130,7 @@ def run_background_cpu_work(classname, pool, args, stop_event, max_score=None):
                                         top10_scores.append(dp.score)
                                         top10_scores.sort(reverse=True)
                                         del top10_scores[10:]
-                                        print(f"[BG-GEN] NEW TOP-10! score={dp.score} (top10 min={top10_scores[-1]})")
+                                        print(f"[BG-GEN] NEW TOP-10! score={dp.score}{gap(dp.score)} (top10 min={top10_scores[-1]})")
                     n_gen += batch_size
                     if not stop_event.is_set():
                         try:
@@ -186,7 +189,7 @@ def run_background_cpu_work(classname, pool, args, stop_event, max_score=None):
                                     top10_scores.append(dp.score)
                                     top10_scores.sort(reverse=True)
                                     del top10_scores[10:]
-                                    print(f"[BG-LS]  NEW TOP-10! score={dp.score} (top10 min={top10_scores[-1]})")
+                                    print(f"[BG-LS]  NEW TOP-10! score={dp.score}{gap(dp.score)} (top10 min={top10_scores[-1]})")
                         n_done += 1
                         # Submit next task
                         t = next(task_iter, None)
@@ -243,7 +246,7 @@ def run_background_cpu_work(classname, pool, args, stop_event, max_score=None):
                                 top10_scores.append(dp.score)
                                 top10_scores.sort(reverse=True)
                                 del top10_scores[10:]
-                                print(f"[BG-ELITE] NEW TOP-10! score={dp.score} (top10 min={top10_scores[-1]})")
+                                print(f"[BG-ELITE] NEW TOP-10! score={dp.score}{gap(dp.score)} (top10 min={top10_scores[-1]})")
                     n_done += 1
                     # Immediately re-pick from current top-100 (includes own discoveries)
                     if not stop_event.is_set():
