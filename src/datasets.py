@@ -180,6 +180,12 @@ def generate_and_score(args, classname, train_data_path=None, test_data_path=Non
     except KeyboardInterrupt:
         signal.signal(signal.SIGINT, signal.SIG_IGN)  # block further Ctrl+C until save completes
         logger.info(f"Interrupted after {n_generated} examples — saving current pool (do not Ctrl+C again)...")
+        if data and train_data_path is not None:
+            import pickle
+            _write_top_dot()
+            pickle.dump(data, open(train_data_path, "wb"))
+            logger.info(f"Pool saved to {train_data_path}. Exiting.")
+        raise SystemExit(1)
 
     if data:
         scores = np.array([d.score for d in data])
