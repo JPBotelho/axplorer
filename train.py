@@ -715,7 +715,7 @@ if __name__ == "__main__":
         top_transformer = sorted(new_data, key=lambda d: d.score, reverse=True)[:100]
         pars = classname._save_class_params()
         bg_mult = args.ls_sa_mult_bg if args.ls_sa_mult_bg > 0 else args.ls_sa_mult
-        elite_sa_steps = args.N * args.N * bg_mult * 10
+        elite_sa_steps = args.N * args.N * bg_mult * 100
         elite_explored = []
         with ProcessPoolExecutor(max_workers=min(16, args.num_workers)) as executor:
             futures = {executor.submit(_run_ls, (copy.deepcopy(dp), pars, elite_sa_steps)): dp for dp in top_transformer}
@@ -743,6 +743,8 @@ if __name__ == "__main__":
         # Merge model samples with background CPU results
         all_new_data = new_data + bg_generated + bg_ls_improved + elite_explored
         train_set, test_set, inc_temp = update_datasets(args, all_new_data, train_set, test_set, train_data_path, test_data_path)
+        # Always include transformer-elite in next epoch's training (structural diversity)
+        train_set = train_set + elite_explored
         log_resources(f"Epoch {epoch} AFTER_UPDATE_DATASETS")
         force_release_memory()
 
