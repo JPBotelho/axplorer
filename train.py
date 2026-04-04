@@ -39,12 +39,13 @@ def run_background_cpu_work(classname, pool, args, stop_event):
     generated = []
     ls_results = []
     seen_features = {d.features for d in pool}
+    data_lock = threading.Lock()  # protects seen_features, generated, ls_results, top10_scores
 
     # Compute score thresholds for alerts (mutable so they update as better graphs are found)
     pool_scores = sorted([d.score for d in pool], reverse=True)
-    p90_threshold = pool_scores[len(pool_scores) // 10] if pool_scores else 0
     top10_scores = pool_scores[:10] if len(pool_scores) >= 10 else pool_scores[:]
-    alert_lock = threading.Lock()
+    if not top10_scores:
+        top10_scores = [0]
 
     # Use at most 50% of cores for background work to avoid starving GPU training
     max_bg_workers = max(1, args.num_workers // 2)
@@ -76,11 +77,11 @@ def run_background_cpu_work(classname, pool, args, stop_event):
                         print(f"[BG-GEN] Worker error: {e}", file=sys.stderr)
                         continue
                     if chunk:
-                        for dp in chunk:
-                            if dp.features not in seen_features:
-                                seen_features.add(dp.features)
-                                generated.append(dp)
-                                with alert_lock:
+                        with data_lock:
+                            for dp in chunk:
+                                if dp.features not in seen_features:
+                                    seen_features.add(dp.features)
+                                    generated.append(dp)
                                     if dp.score > top10_scores[-1]:
                                         top10_scores.append(dp.score)
                                         top10_scores.sort(reverse=True)
@@ -105,14 +106,16 @@ def run_background_cpu_work(classname, pool, args, stop_event):
         n_done = 0
         n_pass = 0
 
-        while not stop_event.is_set():
-            n_pass += 1
-            # Each pass: search the current best graphs (pool + any LS improvements found so far)
-            all_candidates = list(pool) + ls_results
-            top_pool = sorted(all_candidates, key=lambda d: d.score, reverse=True)[:min(len(all_candidates), 5000)]
-            tasks = [(copy.deepcopy(dp), pars, sa_steps) for dp in top_pool]
+        executor = ProcessPoolExecutor(max_workers=n_workers_ls)
+        try:
+            while not stop_event.is_set():
+                n_pass += 1
+                # Each pass: search the current best graphs (pool + any LS improvements found so far)
+                with data_lock:
+                    all_candidates = list(pool) + list(ls_results)
+                top_pool = sorted(all_candidates, key=lambda d: d.score, reverse=True)[:min(len(all_candidates), 5000)]
+                tasks = [(copy.deepcopy(dp), pars, sa_steps) for dp in top_pool]
 
-            with ProcessPoolExecutor(max_workers=n_workers_ls) as executor:
                 futures = {executor.submit(_run_ls, t): None for t in tasks}
                 for future in as_completed(futures):
                     if stop_event.is_set():
@@ -122,10 +125,10 @@ def run_background_cpu_work(classname, pool, args, stop_event):
                     except Exception as e:
                         print(f"[BG-LS] Worker error: {e}", file=sys.stderr)
                         continue
-                    if dp.features not in seen_features:
-                        seen_features.add(dp.features)
-                        ls_results.append(dp)
-                        with alert_lock:
+                    with data_lock:
+                        if dp.features not in seen_features:
+                            seen_features.add(dp.features)
+                            ls_results.append(dp)
                             if dp.score > top10_scores[-1]:
                                 top10_scores.append(dp.score)
                                 top10_scores.sort(reverse=True)
@@ -133,12 +136,9 @@ def run_background_cpu_work(classname, pool, args, stop_event):
                                 print(f"[BG-LS]  NEW TOP-10! score={dp.score} (top10 min={top10_scores[-1]})")
                     n_done += 1
 
-                # Cancel remaining if stopped
-                if stop_event.is_set():
-                    for f in futures:
-                        f.cancel()
-
-            logger.info(f"[BG-LS] Pass {n_pass} done: {n_done} total searched, {len(ls_results)} unique improved")
+                logger.info(f"[BG-LS] Pass {n_pass} done: {n_done} total searched, {len(ls_results)} unique improved")
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
 
         logger.info(f"[BG-LS] Finished: {n_pass} passes, {n_done} searched, {len(ls_results)} unique improved")
 
