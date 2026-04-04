@@ -123,7 +123,7 @@ def _do_score(d, always_search: bool = False, redeem_only: bool = False, pars=No
     return (d, invalid)
 
 
-def do_score(data, args, executor=None):
+def do_score(data, args, executor=None, show_progress=True):
     """
     Compute the score of a list of data.
     Can be parallelized with process_pool.
@@ -133,7 +133,8 @@ def do_score(data, args, executor=None):
     n_invalid = 0
     processed_data = []
     if not args.process_pool:
-        for d in tqdm(data, desc="Scoring", unit="ex"):
+        it = tqdm(data, desc="Scoring", unit="ex") if show_progress else data
+        for d in it:
             res, invalid = _do_score(d, args.always_search, args.redeem_only, sa_steps=sa_steps)
             n_invalid += invalid
             processed_data.append(res)
@@ -143,12 +144,14 @@ def do_score(data, args, executor=None):
         chunksize = max(1, len(data) // (args.num_workers * 32))
 
         if executor is not None:
-            for d, invalid in tqdm(executor.map(_do_score, data, repeat(args.always_search), repeat(args.redeem_only), repeat(pars), repeat(sa_steps), chunksize=chunksize), total=len(data), desc="Scoring", unit="ex"):
+            it = executor.map(_do_score, data, repeat(args.always_search), repeat(args.redeem_only), repeat(pars), repeat(sa_steps), chunksize=chunksize)
+            for d, invalid in (tqdm(it, total=len(data), desc="Scoring", unit="ex") if show_progress else it):
                 processed_data.append(d)
                 n_invalid += invalid
         else:
             with ProcessPoolExecutor(max_workers=min(args.num_workers, len(data))) as ex:
-                for d, invalid in tqdm(ex.map(_do_score, data, repeat(args.always_search), repeat(args.redeem_only), repeat(pars), repeat(sa_steps), chunksize=chunksize), total=len(data), desc="Scoring", unit="ex"):
+                it = ex.map(_do_score, data, repeat(args.always_search), repeat(args.redeem_only), repeat(pars), repeat(sa_steps), chunksize=chunksize)
+                for d, invalid in (tqdm(it, total=len(data), desc="Scoring", unit="ex") if show_progress else it):
                     processed_data.append(d)
                     n_invalid += invalid
 

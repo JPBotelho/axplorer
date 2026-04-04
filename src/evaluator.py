@@ -83,7 +83,7 @@ def sample_and_score(model, args, stoi, itos, env, temp, temp_span=0):
         nonlocal total_invalid
         all_data = [batch_numpy[j] for batch_numpy in batches for j in range(batch_numpy.shape[0])]
         detok_results = detokenize(all_data, args, env, executor=executor)
-        valid_data, n_invalid, processed_data = do_score(detok_results, args=args, executor=executor)
+        valid_data, n_invalid, processed_data = do_score(detok_results, args=args, executor=executor, show_progress=False)
         with results_lock:
             results.extend(valid_data)
             total_invalid += n_invalid
