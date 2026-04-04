@@ -1,6 +1,10 @@
 import argparse
+import copy
 import os
+import sys
+import threading
 import time
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from logging import getLogger
 
 import numpy as np
@@ -16,6 +20,138 @@ from src.trainer import reload_model_optimizer, train
 from src.utils import bool_flag, force_release_memory, initialize_exp, log_resources, write_important_metrics
 
 logger = getLogger()
+
+
+def _run_ls(dp_and_pars):
+    """Worker function for background local search."""
+    dp, pars, sa_steps = dp_and_pars
+    dp.__class__._update_class_params(pars)
+    dp = copy.deepcopy(dp)
+    dp.local_search_fast_v2(sa_steps=sa_steps)
+    return dp
+
+
+def run_background_cpu_work(classname, pool, args, stop_event):
+    """
+    Run random generation and local search on CPU while GPU trains.
+    Returns (generated_graphs, ls_improved_graphs).
+    """
+    generated = []
+    ls_results = []
+    seen_features = {d.features for d in pool}
+
+    # Compute score thresholds for alerts
+    pool_scores = sorted([d.score for d in pool], reverse=True)
+    p90_threshold = pool_scores[len(pool_scores) // 10] if pool_scores else 0
+    top10_min = pool_scores[9] if len(pool_scores) >= 10 else (pool_scores[-1] if pool_scores else 0)
+
+    n_workers_gen = args.bg_workers_gen or args.num_workers // 2
+    n_workers_ls = args.bg_workers_ls or args.num_workers // 2
+
+    def _run_generation():
+        if not args.bg_generation or n_workers_gen < 1:
+            return
+        pars = classname._save_class_params()
+        batch_size = 1000
+        n_gen = 0
+        with ProcessPoolExecutor(max_workers=n_workers_gen) as executor:
+            pending = set()
+            # Submit initial batch of tasks
+            for _ in range(n_workers_gen * 2):
+                if stop_event.is_set():
+                    break
+                f = executor.submit(classname._batch_generate_and_score, batch_size, args.N, pars, args.per_batch_top_k)
+                pending.add(f)
+
+            while pending and not stop_event.is_set():
+                done, pending = _wait_any(pending, timeout=0.5)
+                for future in done:
+                    try:
+                        chunk = future.result()
+                    except Exception as e:
+                        print(f"[BG-GEN] Worker error: {e}", file=sys.stderr)
+                        continue
+                    if chunk:
+                        for dp in chunk:
+                            if dp.features not in seen_features:
+                                seen_features.add(dp.features)
+                                generated.append(dp)
+                                if dp.score >= p90_threshold:
+                                    print(f"[BG-GEN] TOP 10% GRAPH! score={dp.score} (pool p90={p90_threshold})")
+                    n_gen += batch_size
+                    # Submit replacement task
+                    if not stop_event.is_set():
+                        f = executor.submit(classname._batch_generate_and_score, batch_size, args.N, pars, args.per_batch_top_k)
+                        pending.add(f)
+
+            # Drain remaining futures
+            for f in pending:
+                try:
+                    chunk = f.result(timeout=30)
+                    if chunk:
+                        for dp in chunk:
+                            if dp.features not in seen_features:
+                                seen_features.add(dp.features)
+                                generated.append(dp)
+                except Exception:
+                    pass
+        logger.info(f"[BG-GEN] Finished: {n_gen} generated, {len(generated)} unique kept")
+
+    def _run_local_search():
+        if not args.bg_local_search or n_workers_ls < 1:
+            return
+        pars = classname._save_class_params()
+        sa_steps = None  # use default N^2 * 10
+        # Search the top graphs from the pool
+        top_pool = sorted(pool, key=lambda d: d.score, reverse=True)[:min(len(pool), 5000)]
+        tasks = [(copy.deepcopy(dp), pars, sa_steps) for dp in top_pool]
+
+        n_done = 0
+        with ProcessPoolExecutor(max_workers=n_workers_ls) as executor:
+            futures = {executor.submit(_run_ls, t): None for t in tasks}
+            for future in as_completed(futures):
+                if stop_event.is_set():
+                    break
+                try:
+                    dp = future.result()
+                except Exception as e:
+                    print(f"[BG-LS] Worker error: {e}", file=sys.stderr)
+                    continue
+                if dp.features not in seen_features:
+                    seen_features.add(dp.features)
+                    ls_results.append(dp)
+                    if dp.score > top10_min:
+                        print(f"[BG-LS]  NEW TOP-10 GRAPH! score={dp.score} (prev top-10 min={top10_min})")
+                n_done += 1
+
+            # Cancel remaining if stopped early
+            if stop_event.is_set():
+                for f in futures:
+                    f.cancel()
+        logger.info(f"[BG-LS] Finished: {n_done} searched, {len(ls_results)} unique improved")
+
+    # Run generation and LS in separate threads (each manages its own ProcessPoolExecutor)
+    threads = []
+    if args.bg_generation:
+        t = threading.Thread(target=_run_generation, name="bg-gen")
+        threads.append(t)
+    if args.bg_local_search:
+        t = threading.Thread(target=_run_local_search, name="bg-ls")
+        threads.append(t)
+
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    return generated, ls_results
+
+
+def _wait_any(futures, timeout=0.5):
+    """Wait for at least one future to complete, with timeout for stop_event checking."""
+    import concurrent.futures
+    done, not_done = concurrent.futures.wait(futures, timeout=timeout, return_when=concurrent.futures.FIRST_COMPLETED)
+    return done, not_done
 
 
 def get_parser():
@@ -68,6 +204,12 @@ def get_parser():
     parser.add_argument("--gen_log_interval", type=int, default=1_000_000, help="log best score every N generated examples (0 to disable)")
     parser.add_argument("--gen_save_interval", type=int, default=60, help="save pool to disk every N seconds during generation (0 to disable)")
     parser.add_argument("--per_batch_top_k", type=int, default=10, help="how many top candidates to return per generation batch")
+
+    # background CPU work during training
+    parser.add_argument("--bg_generation", type=bool_flag, default="false", help="run random graph generation on CPU during training")
+    parser.add_argument("--bg_local_search", type=bool_flag, default="false", help="run local search on pool during training")
+    parser.add_argument("--bg_workers_gen", type=int, default=0, help="CPU cores for background generation (0 = num_workers // 2)")
+    parser.add_argument("--bg_workers_ls", type=int, default=0, help="CPU cores for background local search (0 = num_workers // 2)")
 
     return parser
 
@@ -169,10 +311,32 @@ if __name__ == "__main__":
                 f"Memory allocated: {torch.mps.current_allocated_memory()/(1024*1024):.2f}MB, reserved: {torch.mps.driver_allocated_memory()/(1024*1024):.2f}MB"
             )
 
+        # Start background CPU work (generation + local search) during training
+        bg_use = args.bg_generation or args.bg_local_search
+        if bg_use:
+            bg_stop = threading.Event()
+            bg_result = [None]  # mutable container for thread result
+
+            def _bg_wrapper():
+                bg_result[0] = run_background_cpu_work(classname, train_set, args, bg_stop)
+
+            bg_thread = threading.Thread(target=_bg_wrapper, name="bg-cpu", daemon=True)
+            bg_thread.start()
+            logger.info(f"[BG] Started background CPU work (gen={args.bg_generation}, ls={args.bg_local_search})")
+
         batch_loader = InfiniteDataLoader(train_dataset, batch_size=args.batch_size, pin_memory=True, num_workers=min(31, args.num_workers))
         best_loss = train(model, args, batch_loader, optimizer, test_dataset, current_best_loss=best_loss)
         log_resources(f"Epoch {epoch} AFTER_TRAIN")
         force_release_memory()
+
+        # Stop background CPU work and collect results
+        bg_generated, bg_ls_improved = [], []
+        if bg_use:
+            bg_stop.set()
+            bg_thread.join()
+            if bg_result[0] is not None:
+                bg_generated, bg_ls_improved = bg_result[0]
+            logger.info(f"[BG] Collected: {len(bg_generated)} generated, {len(bg_ls_improved)} from LS")
 
         logger.info(f"Sample with temperature {temperature} to {temperature+0.1*args.temp_span}")
         if args.device == "cuda":
@@ -188,12 +352,12 @@ if __name__ == "__main__":
         elif args.device == "mps":
             torch.mps.empty_cache()
 
-        # Possible to add another generation method here and mix it before taking the best
-        train_set, test_set, inc_temp = update_datasets(args, new_data, train_set, test_set, train_data_path, test_data_path)
+        # Merge model samples with background CPU results
+        all_new_data = new_data + bg_generated + bg_ls_improved
+        train_set, test_set, inc_temp = update_datasets(args, all_new_data, train_set, test_set, train_data_path, test_data_path)
         log_resources(f"Epoch {epoch} AFTER_UPDATE_DATASETS")
         force_release_memory()
 
-        # Possible to add another generation method here and mix it before taking the best
         if inc_temp and args.inc_temp > 0.0:
             temperature += args.inc_temp
 
