@@ -189,10 +189,20 @@ def select_best(n, data):
 def make_train_test(data, ntest):
     """
     Create a train and test dataset from a dataset.
+    The top-scoring examples are always kept in train to avoid losing the best graphs.
     """
-    indices = np.random.permutation(len(data))
-    rp = [data[i] for i in indices]
-    return rp[:-ntest], rp[-ntest:]
+    if len(data) <= ntest:
+        return data, []
+    # Sort by score descending, protect the top ntest examples from being split into test
+    sorted_data = sorted(data, key=lambda x: x.score, reverse=True)
+    protected = sorted_data[:ntest]  # top ntest always in train
+    rest = sorted_data[ntest:]
+    indices = np.random.permutation(len(rest))
+    rest = [rest[i] for i in indices]
+    test_set = rest[:ntest]
+    train_set = protected + rest[ntest:]
+    random.shuffle(train_set)
+    return train_set, test_set
 
 
 def compute_unique_data(old_data, new_data=None):
