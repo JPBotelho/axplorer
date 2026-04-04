@@ -81,7 +81,7 @@ def run_background_cpu_work(classname, pool, args, stop_event, max_score=None):
     if not top10_scores:
         top10_scores = [0]
 
-    # Use at most 50% of cores for background work to avoid starving GPU training
+    # Use at most 1/4 of cores by default; explicit --bg_workers_* args override the cap
     max_bg_workers = max(1, args.num_workers // 4)
     if args.bg_generation and args.bg_local_search:
         n_workers_gen = args.bg_workers_gen or max_bg_workers // 2
@@ -92,10 +92,11 @@ def run_background_cpu_work(classname, pool, args, stop_event, max_score=None):
     else:
         n_workers_gen = 0
         n_workers_ls = args.bg_workers_ls or max_bg_workers
-    # Reserve 4 cores for elite search if LS is enabled
-    if args.bg_local_search and n_workers_ls > 4:
-        n_workers_ls -= 4
-    logger.info(f"[BG] Using {n_workers_gen} gen + {n_workers_ls} LS + 4 elite workers (of {args.num_workers} total)")
+    # Reserve cores for elite search if LS is enabled
+    n_elite_workers = args.bg_workers_elite if args.bg_workers_elite > 0 else 4
+    if args.bg_local_search and n_workers_ls > n_elite_workers:
+        n_workers_ls -= n_elite_workers
+    logger.info(f"[BG] Using {n_workers_gen} gen + {n_workers_ls} LS + {n_elite_workers} elite workers (of {args.num_workers} total)")
 
     def _run_generation():
         if not args.bg_generation or n_workers_gen < 1:
@@ -217,7 +218,6 @@ def run_background_cpu_work(classname, pool, args, stop_event, max_score=None):
         pars = classname._save_class_params()
         sa_steps = args.N * args.N * args.ls_sa_mult * 10  # 10x more SA effort for elite
         n_done = 0
-        n_elite_workers = 4
 
         executor = ProcessPoolExecutor(max_workers=n_elite_workers)
         try:
@@ -340,6 +340,7 @@ def get_parser():
     parser.add_argument("--bg_local_search", type=bool_flag, default="false", help="run local search on pool during training")
     parser.add_argument("--bg_workers_gen", type=int, default=0, help="CPU cores for background generation (0 = num_workers // 2)")
     parser.add_argument("--bg_workers_ls", type=int, default=0, help="CPU cores for background local search (0 = num_workers // 2)")
+    parser.add_argument("--bg_workers_elite", type=int, default=0, help="CPU cores for elite search (0 = 4)")
     parser.add_argument("--ls_sa_mult", type=int, default=10, help="SA steps multiplier: total steps = N^2 * this value")
 
     return parser
