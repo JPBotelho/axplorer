@@ -239,17 +239,11 @@ def run_background_cpu_work(classname, pool, args, stop_event):
                                 del top10_scores[10:]
                                 print(f"[BG-ELITE] NEW TOP-10! score={dp.score} (top10 min={top10_scores[-1]})")
                     n_done += 1
-                    # Immediately re-pick from current top-5 (includes own discoveries)
+                    # Immediately re-pick from current top-100 (includes own discoveries)
                     if not stop_event.is_set():
                         t = _pick_elite_task(pars, sa_steps)
                         if t is not None:
                             pending.add(executor.submit(_run_ls, t))
-
-                if n_done % 20 == 0 and n_done > 0:
-                    with data_lock:
-                        all_c = list(pool) + list(ls_results)
-                    top_score = max(d.score for d in all_c) if all_c else 0
-                    logger.info(f"[BG-ELITE] {n_done} searched, best={top_score}, ls_results={len(ls_results)}")
         finally:
             _kill_executor(executor)
         logger.info(f"[BG-ELITE] Finished: {n_done} total searched")
