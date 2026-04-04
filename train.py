@@ -92,17 +92,9 @@ def run_background_cpu_work(classname, pool, args, stop_event):
                         f = executor.submit(classname._batch_generate_and_score, batch_size, args.N, pars, args.per_batch_top_k)
                         pending.add(f)
 
-            # Drain remaining futures
+            # Cancel remaining futures instead of waiting
             for f in pending:
-                try:
-                    chunk = f.result(timeout=30)
-                    if chunk:
-                        for dp in chunk:
-                            if dp.features not in seen_features:
-                                seen_features.add(dp.features)
-                                generated.append(dp)
-                except Exception:
-                    pass
+                f.cancel()
         logger.info(f"[BG-GEN] Finished: {n_gen} generated, {len(generated)} unique kept")
 
     def _run_local_search():
