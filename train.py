@@ -1,5 +1,6 @@
 import argparse
 import copy
+import itertools
 import os
 import sys
 import threading
@@ -32,14 +33,33 @@ def _run_ls(dp_and_pars):
 
 
 def _kill_executor(executor):
-    """Force-kill all worker processes in an executor, then shutdown."""
+    """Shut down executor quickly without leaving zombies."""
     import signal
-    for pid in list(executor._processes.keys()):
-        try:
-            os.kill(pid, signal.SIGKILL)
-        except (ProcessLookupError, OSError):
-            pass
-    executor.shutdown(wait=True, cancel_futures=True)
+    # Prevent deadlock: cancel the internal feeder thread join so
+    # shutdown doesn't block on a pipe write to dead workers.
+    try:
+        executor._call_queue.cancel_join_thread()
+    except Exception:
+        pass
+    # SIGTERM first for clean shutdown
+    for p in list(executor._processes.values()):
+        if p.is_alive():
+            try:
+                p.terminate()
+            except OSError:
+                pass
+    # Wait briefly, then SIGKILL stragglers and reap zombies
+    deadline = time.monotonic() + 1.0
+    for p in list(executor._processes.values()):
+        remaining = max(0.01, deadline - time.monotonic())
+        p.join(timeout=remaining)
+        if p.is_alive():
+            try:
+                os.kill(p.pid, signal.SIGKILL)
+            except (ProcessLookupError, OSError):
+                pass
+            p.join(timeout=1.0)
+    executor.shutdown(wait=False, cancel_futures=True)
 
 
 def run_background_cpu_work(classname, pool, args, stop_event):
@@ -133,25 +153,34 @@ def run_background_cpu_work(classname, pool, args, stop_event):
                 top_pool = sorted(all_candidates, key=lambda d: d.score, reverse=True)[:min(len(all_candidates), 5000)]
                 tasks = [(copy.deepcopy(dp), pars, sa_steps) for dp in top_pool]
 
-                futures = {executor.submit(_run_ls, t): None for t in tasks}
-                for future in as_completed(futures):
-                    if stop_event.is_set():
-                        break
-                    try:
-                        dp = future.result()
-                    except Exception as e:
-                        print(f"[BG-LS] Worker error: {e}", file=sys.stderr)
-                        continue
-                    with data_lock:
-                        if dp.features not in seen_features:
-                            seen_features.add(dp.features)
-                            ls_results.append(dp)
-                            if dp.score > top10_scores[-1]:
-                                top10_scores.append(dp.score)
-                                top10_scores.sort(reverse=True)
-                                del top10_scores[10:]
-                                print(f"[BG-LS]  NEW TOP-10! score={dp.score} (top10 min={top10_scores[-1]})")
-                    n_done += 1
+                # Submit incrementally to avoid filling the internal queue
+                task_iter = iter(tasks)
+                pending = set()
+                for t in itertools.islice(task_iter, n_workers_ls * 2):
+                    pending.add(executor.submit(_run_ls, t))
+
+                while pending and not stop_event.is_set():
+                    done, pending = _wait_any(pending, timeout=0.5)
+                    for future in done:
+                        try:
+                            dp = future.result()
+                        except Exception as e:
+                            print(f"[BG-LS] Worker error: {e}", file=sys.stderr)
+                            continue
+                        with data_lock:
+                            if dp.features not in seen_features:
+                                seen_features.add(dp.features)
+                                ls_results.append(dp)
+                                if dp.score > top10_scores[-1]:
+                                    top10_scores.append(dp.score)
+                                    top10_scores.sort(reverse=True)
+                                    del top10_scores[10:]
+                                    print(f"[BG-LS]  NEW TOP-10! score={dp.score} (top10 min={top10_scores[-1]})")
+                        n_done += 1
+                        # Submit next task
+                        t = next(task_iter, None)
+                        if t is not None and not stop_event.is_set():
+                            pending.add(executor.submit(_run_ls, t))
 
                 logger.info(f"[BG-LS] Pass {n_pass} done: {n_done} total searched, {len(ls_results)} unique improved")
         finally:
