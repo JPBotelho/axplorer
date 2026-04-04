@@ -179,6 +179,8 @@ def run_background_cpu_work(classname, pool, args, stop_event):
                                     top10_scores.sort(reverse=True)
                                     del top10_scores[10:]
                                     print(f"[BG-LS]  NEW TOP-10! score={dp.score} (top10 min={top10_scores[-1]})")
+                                elif dp.score >= top10_scores[0] - 5:
+                                    print(f"[BG-LS]  Near-top graph: score={dp.score} (best={top10_scores[0]})")
                         n_done += 1
                         # Submit next task
                         t = next(task_iter, None)
@@ -191,8 +193,18 @@ def run_background_cpu_work(classname, pool, args, stop_event):
 
         logger.info(f"[BG-LS] Finished: {n_pass} passes, {n_done} searched, {len(ls_results)} unique improved")
 
+    def _pick_elite_task(pars, sa_steps):
+        """Pick a random graph from the current top-5 distinct scores."""
+        with data_lock:
+            all_candidates = list(pool) + list(ls_results)
+        if not all_candidates:
+            return None
+        elite = sorted(all_candidates, key=lambda d: d.score, reverse=True)[:100]
+        dp = copy.deepcopy(elite[np.random.randint(len(elite))])
+        return (dp, pars, sa_steps)
+
     def _run_elite_search():
-        """Dedicate 4 cores to continuously searching graphs with the top 5 distinct scores."""
+        """Dedicate 4 cores to continuously searching the current top-5 scores (dynamic)."""
         pars = classname._save_class_params()
         sa_steps = args.N * args.N * args.ls_sa_mult * 10  # 10x more SA effort for elite
         n_done = 0
@@ -200,48 +212,44 @@ def run_background_cpu_work(classname, pool, args, stop_event):
 
         executor = ProcessPoolExecutor(max_workers=n_elite_workers)
         try:
-            while not stop_event.is_set():
-                # Get graphs with top 5 distinct scores
-                with data_lock:
-                    all_candidates = list(pool) + list(ls_results)
-                scores_desc = sorted(set(d.score for d in all_candidates), reverse=True)
-                top5_scores = set(scores_desc[:5])
-                elite = [d for d in all_candidates if d.score in top5_scores]
-                tasks = [(copy.deepcopy(dp), pars, sa_steps) for dp in elite]
-
-                if not tasks:
-                    if stop_event.wait(1.0):
-                        break
-                    continue
-
-                task_iter = iter(tasks)
-                pending = set()
-                for t in itertools.islice(task_iter, n_elite_workers * 2):
+            pending = set()
+            # Fill initial slots
+            for _ in range(n_elite_workers * 2):
+                if stop_event.is_set():
+                    break
+                t = _pick_elite_task(pars, sa_steps)
+                if t is not None:
                     pending.add(executor.submit(_run_ls, t))
 
-                while pending and not stop_event.is_set():
-                    done, pending = _wait_any(pending, timeout=0.5)
-                    for future in done:
-                        try:
-                            dp = future.result()
-                        except Exception as e:
-                            print(f"[BG-ELITE] Worker error: {e}", file=sys.stderr)
-                            continue
-                        with data_lock:
-                            if dp.features not in seen_features:
-                                seen_features.add(dp.features)
-                                ls_results.append(dp)
-                                if dp.score > top10_scores[-1]:
-                                    top10_scores.append(dp.score)
-                                    top10_scores.sort(reverse=True)
-                                    del top10_scores[10:]
-                                    print(f"[BG-ELITE] NEW TOP-10! score={dp.score} (top10 min={top10_scores[-1]})")
-                        n_done += 1
-                        t = next(task_iter, None)
-                        if t is not None and not stop_event.is_set():
+            while pending and not stop_event.is_set():
+                done, pending = _wait_any(pending, timeout=0.5)
+                for future in done:
+                    try:
+                        dp = future.result()
+                    except Exception as e:
+                        print(f"[BG-ELITE] Worker error: {e}", file=sys.stderr)
+                        continue
+                    with data_lock:
+                        if dp.features not in seen_features:
+                            seen_features.add(dp.features)
+                            ls_results.append(dp)
+                            if dp.score > top10_scores[-1]:
+                                top10_scores.append(dp.score)
+                                top10_scores.sort(reverse=True)
+                                del top10_scores[10:]
+                                print(f"[BG-ELITE] NEW TOP-10! score={dp.score} (top10 min={top10_scores[-1]})")
+                    n_done += 1
+                    # Immediately re-pick from current top-5 (includes own discoveries)
+                    if not stop_event.is_set():
+                        t = _pick_elite_task(pars, sa_steps)
+                        if t is not None:
                             pending.add(executor.submit(_run_ls, t))
 
-                logger.info(f"[BG-ELITE] Pass done: {n_done} searched, elite pool size={len(elite)}")
+                if n_done % 20 == 0 and n_done > 0:
+                    with data_lock:
+                        all_c = list(pool) + list(ls_results)
+                    top_score = max(d.score for d in all_c) if all_c else 0
+                    logger.info(f"[BG-ELITE] {n_done} searched, best={top_score}, ls_results={len(ls_results)}")
         finally:
             _kill_executor(executor)
         logger.info(f"[BG-ELITE] Finished: {n_done} total searched")
