@@ -183,8 +183,6 @@ def run_background_cpu_work(classname, pool, args, stop_event, max_score=None):
                                     top10_scores.sort(reverse=True)
                                     del top10_scores[10:]
                                     print(f"[BG-LS]  NEW TOP-10! score={dp.score} (top10 min={top10_scores[-1]})")
-                                elif dp.score >= top10_scores[0] - 5:
-                                    print(f"[BG-LS]  Near-top graph: score={dp.score} (best={top10_scores[0]})")
                         n_done += 1
                         # Submit next task
                         t = next(task_iter, None)
