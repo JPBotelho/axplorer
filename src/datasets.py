@@ -278,12 +278,17 @@ def update_datasets(args, data, train_set, test_set, train_path, test_path):
 def load_initial_data(args, classname):
     train_data_path = os.path.join(args.dump_path, "train_data.pkl")
     test_data_path = os.path.join(args.dump_path, "test_data.pkl")
-    if os.path.isfile(train_data_path):
+    if os.path.isfile(train_data_path) and os.path.isfile(test_data_path):
         logger.info("resuming from existing data")
         train_set = pickle.load(open(train_data_path, "rb"))
         test_set = pickle.load(open(test_data_path, "rb"))
     else:
-        data, found_max = generate_and_score(args, classname=classname, train_data_path=train_data_path, test_data_path=test_data_path)
+        if os.path.isfile(train_data_path) and not os.path.isfile(test_data_path):
+            logger.info("Found interrupted generation checkpoint — running update_datasets to finalize")
+            data = pickle.load(open(train_data_path, "rb"))
+            found_max = False
+        else:
+            data, found_max = generate_and_score(args, classname=classname, train_data_path=train_data_path, test_data_path=test_data_path)
         test_set = []
         train_set = []
         train_set, test_set, _ = update_datasets(args, data, train_set, test_set, train_data_path, test_data_path)
