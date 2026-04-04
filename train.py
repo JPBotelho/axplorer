@@ -158,7 +158,7 @@ def run_background_cpu_work(classname, pool, args, stop_event, max_score=None):
     n_crossover_workers = args.bg_workers_crossover if args.bg_workers_crossover > 0 else 2
     n_double_bridge_workers = args.bg_workers_double_bridge if args.bg_workers_double_bridge > 0 else 2
     reserved = n_elite_workers + n_targeted_workers + n_crossover_workers + n_double_bridge_workers
-    if args.bg_local_search and n_workers_ls > reserved:
+    if args.bg_local_search and args.bg_workers_ls == 0 and n_workers_ls > reserved:
         n_workers_ls -= reserved
     logger.info(f"[BG] Using {n_workers_gen} gen + {n_workers_ls} LS + {n_elite_workers} elite + {n_targeted_workers} targeted + {n_crossover_workers} crossover + {n_double_bridge_workers} double-bridge workers (of {args.num_workers} total)")
 
