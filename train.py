@@ -712,10 +712,10 @@ if __name__ == "__main__":
             torch.mps.empty_cache()
 
         # Deep LS on top 100 transformer samples
-        top_transformer = sorted(new_data, key=lambda d: d.score, reverse=True)[:500]
+        top_transformer = sorted(new_data, key=lambda d: d.score, reverse=True)[:100]
         pars = classname._save_class_params()
         bg_mult = args.ls_sa_mult_bg if args.ls_sa_mult_bg > 0 else args.ls_sa_mult
-        elite_sa_steps = args.N * args.N * bg_mult * 200
+        elite_sa_steps = args.N * args.N * bg_mult * 1000
         elite_explored = []
         with ProcessPoolExecutor(max_workers=args.num_workers) as executor:
             futures = {executor.submit(_run_ls, (copy.deepcopy(dp), pars, elite_sa_steps)): dp for dp in top_transformer}
