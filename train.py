@@ -711,20 +711,36 @@ if __name__ == "__main__":
         elif args.device == "mps":
             torch.mps.empty_cache()
 
-        # Deep LS on top 100 transformer samples
+        # Deep LS on top 96 transformer samples
         top_transformer = sorted(new_data, key=lambda d: d.score, reverse=True)[:96]
         pars = classname._save_class_params()
         bg_mult = args.ls_sa_mult_bg if args.ls_sa_mult_bg > 0 else args.ls_sa_mult
         elite_sa_steps = args.N * args.N * bg_mult * 1000
+        overall_best = max((d.score for d in train_set), default=0)
         elite_explored = []
         with ProcessPoolExecutor(max_workers=args.num_workers) as executor:
             futures = {executor.submit(_run_ls, (copy.deepcopy(dp), pars, elite_sa_steps)): dp for dp in top_transformer}
-            for future in tqdm(as_completed(futures), total=len(futures), desc="Exploring Top 100"):
+            for future in tqdm(as_completed(futures), total=len(futures), desc="Transformer-elite phase 1"):
                 try:
                     dp = future.result()
                     elite_explored.append(dp)
                 except Exception as e:
                     print(f"[EXPLORE] Worker error: {e}", file=sys.stderr)
+
+        # Phase 2: re-run graphs within 5 of overall best with same depth (2x total)
+        rerun_candidates = [dp for dp in elite_explored if dp.score >= overall_best - 5]
+        if rerun_candidates:
+            logger.info(f"[ELITE] Phase 2: re-running {len(rerun_candidates)} graphs with score >= {overall_best - 5} (overall_best={overall_best})")
+            with ProcessPoolExecutor(max_workers=args.num_workers) as executor:
+                futures = {executor.submit(_run_ls, (copy.deepcopy(dp), pars, elite_sa_steps)): dp for dp in rerun_candidates}
+                for future in tqdm(as_completed(futures), total=len(futures), desc="Transformer-elite phase 2"):
+                    try:
+                        dp = future.result()
+                        elite_explored.append(dp)
+                    except Exception as e:
+                        print(f"[EXPLORE] Worker error: {e}", file=sys.stderr)
+        else:
+            logger.info(f"[ELITE] Phase 2: no graphs within 5 of overall best ({overall_best}), skipping")
 
         # Log separate stats before merging
         def _log_source(name, data):
