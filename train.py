@@ -110,37 +110,45 @@ def run_background_cpu_work(classname, pool, args, stop_event):
             return
         pars = classname._save_class_params()
         sa_steps = None  # use default N^2 * 10
-        # Search the top graphs from the pool
-        top_pool = sorted(pool, key=lambda d: d.score, reverse=True)[:min(len(pool), 5000)]
-        tasks = [(copy.deepcopy(dp), pars, sa_steps) for dp in top_pool]
-
         n_done = 0
-        with ProcessPoolExecutor(max_workers=n_workers_ls) as executor:
-            futures = {executor.submit(_run_ls, t): None for t in tasks}
-            for future in as_completed(futures):
-                if stop_event.is_set():
-                    break
-                try:
-                    dp = future.result()
-                except Exception as e:
-                    print(f"[BG-LS] Worker error: {e}", file=sys.stderr)
-                    continue
-                if dp.features not in seen_features:
-                    seen_features.add(dp.features)
-                    ls_results.append(dp)
-                    with alert_lock:
-                        if dp.score > top10_scores[-1]:
-                            top10_scores.append(dp.score)
-                            top10_scores.sort(reverse=True)
-                            del top10_scores[10:]
-                            print(f"[BG-LS]  NEW TOP-10! score={dp.score} (top10 min={top10_scores[-1]})")
-                n_done += 1
+        n_pass = 0
 
-            # Cancel remaining if stopped early
-            if stop_event.is_set():
-                for f in futures:
-                    f.cancel()
-        logger.info(f"[BG-LS] Finished: {n_done} searched, {len(ls_results)} unique improved")
+        while not stop_event.is_set():
+            n_pass += 1
+            # Each pass: search the current best graphs (pool + any LS improvements found so far)
+            all_candidates = list(pool) + ls_results
+            top_pool = sorted(all_candidates, key=lambda d: d.score, reverse=True)[:min(len(all_candidates), 5000)]
+            tasks = [(copy.deepcopy(dp), pars, sa_steps) for dp in top_pool]
+
+            with ProcessPoolExecutor(max_workers=n_workers_ls) as executor:
+                futures = {executor.submit(_run_ls, t): None for t in tasks}
+                for future in as_completed(futures):
+                    if stop_event.is_set():
+                        break
+                    try:
+                        dp = future.result()
+                    except Exception as e:
+                        print(f"[BG-LS] Worker error: {e}", file=sys.stderr)
+                        continue
+                    if dp.features not in seen_features:
+                        seen_features.add(dp.features)
+                        ls_results.append(dp)
+                        with alert_lock:
+                            if dp.score > top10_scores[-1]:
+                                top10_scores.append(dp.score)
+                                top10_scores.sort(reverse=True)
+                                del top10_scores[10:]
+                                print(f"[BG-LS]  NEW TOP-10! score={dp.score} (top10 min={top10_scores[-1]})")
+                    n_done += 1
+
+                # Cancel remaining if stopped
+                if stop_event.is_set():
+                    for f in futures:
+                        f.cancel()
+
+            logger.info(f"[BG-LS] Pass {n_pass} done: {n_done} total searched, {len(ls_results)} unique improved")
+
+        logger.info(f"[BG-LS] Finished: {n_pass} passes, {n_done} searched, {len(ls_results)} unique improved")
 
     # Run generation and LS in separate threads (each manages its own ProcessPoolExecutor)
     threads = []
