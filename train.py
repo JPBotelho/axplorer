@@ -113,7 +113,7 @@ def run_background_cpu_work(classname, pool, args, stop_event):
         if not args.bg_local_search or n_workers_ls < 1:
             return
         pars = classname._save_class_params()
-        sa_steps = None  # use default N^2 * 10
+        sa_steps = args.N * args.N * args.ls_sa_mult
         n_done = 0
         n_pass = 0
 
@@ -232,6 +232,7 @@ def get_parser():
     parser.add_argument("--bg_local_search", type=bool_flag, default="false", help="run local search on pool during training")
     parser.add_argument("--bg_workers_gen", type=int, default=0, help="CPU cores for background generation (0 = num_workers // 2)")
     parser.add_argument("--bg_workers_ls", type=int, default=0, help="CPU cores for background local search (0 = num_workers // 2)")
+    parser.add_argument("--ls_sa_mult", type=int, default=10, help="SA steps multiplier: total steps = N^2 * this value")
 
     return parser
 

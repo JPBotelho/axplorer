@@ -108,7 +108,7 @@ def do_stats(n_invalid, data):
     return compute_stats(scores)
 
 
-def _do_score(d, always_search: bool = False, redeem_only: bool = False, pars=None):
+def _do_score(d, always_search: bool = False, redeem_only: bool = False, pars=None, sa_steps=None):
     invalid = 0
     if pars is not None:
         d._update_class_params(pars)
@@ -116,7 +116,7 @@ def _do_score(d, always_search: bool = False, redeem_only: bool = False, pars=No
     d.calc_score()
     invalid = 1 if d.score < 0 else 0
     if always_search:
-        d.local_search_fast_v2()
+        d.local_search_fast_v2(sa_steps=sa_steps)
     elif invalid:
         if redeem_only:
             d.local_search(improve_with_local_search=False)
@@ -129,11 +129,12 @@ def do_score(data, args, executor=None):
     Can be parallelized with process_pool.
     Returns only valid items (score >= 0).
     """
+    sa_steps = getattr(args, 'N', 0) ** 2 * getattr(args, 'ls_sa_mult', 10) if getattr(args, 'ls_sa_mult', 10) != 10 else None
     n_invalid = 0
     processed_data = []
     if not args.process_pool:
         for d in tqdm(data, desc="Scoring", unit="ex"):
-            res, invalid = _do_score(d, args.always_search, args.redeem_only)
+            res, invalid = _do_score(d, args.always_search, args.redeem_only, sa_steps=sa_steps)
             n_invalid += invalid
             processed_data.append(res)
     else:
@@ -142,12 +143,12 @@ def do_score(data, args, executor=None):
         chunksize = max(1, len(data) // (args.num_workers * 32))
 
         if executor is not None:
-            for d, invalid in tqdm(executor.map(_do_score, data, repeat(args.always_search), repeat(args.redeem_only), repeat(pars), chunksize=chunksize), total=len(data), desc="Scoring", unit="ex"):
+            for d, invalid in tqdm(executor.map(_do_score, data, repeat(args.always_search), repeat(args.redeem_only), repeat(pars), repeat(sa_steps), chunksize=chunksize), total=len(data), desc="Scoring", unit="ex"):
                 processed_data.append(d)
                 n_invalid += invalid
         else:
             with ProcessPoolExecutor(max_workers=min(args.num_workers, len(data))) as ex:
-                for d, invalid in tqdm(ex.map(_do_score, data, repeat(args.always_search), repeat(args.redeem_only), repeat(pars), chunksize=chunksize), total=len(data), desc="Scoring", unit="ex"):
+                for d, invalid in tqdm(ex.map(_do_score, data, repeat(args.always_search), repeat(args.redeem_only), repeat(pars), repeat(sa_steps), chunksize=chunksize), total=len(data), desc="Scoring", unit="ex"):
                     processed_data.append(d)
                     n_invalid += invalid
 
