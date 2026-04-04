@@ -123,6 +123,7 @@ def generate_and_score(args, classname, train_data_path=None, test_data_path=Non
         if gen_save_interval > 0 and time.time() - last_saved >= gen_save_interval:
             _save()
 
+    found_max = False
     try:
         if args.process_pool:
             import concurrent.futures
@@ -134,7 +135,7 @@ def generate_and_score(args, classname, train_data_path=None, test_data_path=Non
                     f = executor.submit(classname._batch_generate_and_score, bc, args.N, pars, per_batch_top_k)
                     pending[f] = bc
                 with tqdm(total=args.gensize, desc="Generating data", unit="ex") as pbar:
-                    while pending:
+                    while pending and not found_max:
                         done, _ = concurrent.futures.wait(pending, return_when=concurrent.futures.FIRST_COMPLETED)
                         for future in done:
                             bc = pending.pop(future)
@@ -146,7 +147,12 @@ def generate_and_score(args, classname, train_data_path=None, test_data_path=Non
                                     if dp.features not in seen_features:
                                         seen_features.add(dp.features)
                                         data.append(dp)
+                                        if max_score is not None and dp.score >= max_score:
+                                            logger.info(f"[GEN] Found perfect graph (score={dp.score})! Stopping early.")
+                                            found_max = True
                                 _log_stats()
+                            if found_max:
+                                break
                             # submit next batch
                             try:
                                 next_bc = next(batch_counts_iter)
@@ -157,6 +163,8 @@ def generate_and_score(args, classname, train_data_path=None, test_data_path=Non
         else:
             with tqdm(total=args.gensize, desc="Generating data", unit="ex") as pbar:
                 for t in batch_counts_iter:
+                    if found_max:
+                        break
                     chunk = classname._batch_generate_and_score(t, args.N, return_top_k=per_batch_top_k)
                     n_generated += t
                     pbar.update(t)
@@ -165,6 +173,9 @@ def generate_and_score(args, classname, train_data_path=None, test_data_path=Non
                             if dp.features not in seen_features:
                                 seen_features.add(dp.features)
                                 data.append(dp)
+                                if max_score is not None and dp.score >= max_score:
+                                    logger.info(f"[GEN] Found perfect graph (score={dp.score})! Stopping early.")
+                                    found_max = True
                         _log_stats()
     except KeyboardInterrupt:
         signal.signal(signal.SIGINT, signal.SIG_IGN)  # block further Ctrl+C until save completes
