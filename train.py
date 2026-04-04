@@ -117,7 +117,7 @@ def run_background_cpu_work(classname, pool, args, stop_event, max_score=None):
         n_workers_ls = args.bg_workers_ls or max_bg_workers
     # Reserve cores for elite and targeted search if LS is enabled
     n_elite_workers = args.bg_workers_elite if args.bg_workers_elite > 0 else 4
-    n_targeted_workers = 2
+    n_targeted_workers = args.bg_workers_targeted if args.bg_workers_targeted > 0 else 2
     if args.bg_local_search and n_workers_ls > n_elite_workers + n_targeted_workers:
         n_workers_ls -= (n_elite_workers + n_targeted_workers)
     logger.info(f"[BG] Using {n_workers_gen} gen + {n_workers_ls} LS + {n_elite_workers} elite + {n_targeted_workers} targeted workers (of {args.num_workers} total)")
@@ -418,6 +418,7 @@ def get_parser():
     parser.add_argument("--bg_workers_gen", type=int, default=0, help="CPU cores for background generation (0 = num_workers // 2)")
     parser.add_argument("--bg_workers_ls", type=int, default=0, help="CPU cores for background local search (0 = num_workers // 2)")
     parser.add_argument("--bg_workers_elite", type=int, default=0, help="CPU cores for elite search (0 = 4)")
+    parser.add_argument("--bg_workers_targeted", type=int, default=0, help="CPU cores for targeted edge perturbation search (0 = 2)")
     parser.add_argument("--ls_sa_mult", type=int, default=10, help="SA steps multiplier for post-generation scoring: total steps = N^2 * this value")
     parser.add_argument("--ls_sa_mult_bg", type=int, default=0, help="SA steps multiplier for background LS (0 = same as --ls_sa_mult)")
 
