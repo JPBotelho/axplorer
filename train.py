@@ -717,7 +717,7 @@ if __name__ == "__main__":
         bg_mult = args.ls_sa_mult_bg if args.ls_sa_mult_bg > 0 else args.ls_sa_mult
         elite_sa_steps = args.N * args.N * bg_mult * 200
         elite_explored = []
-        with ProcessPoolExecutor(max_workers=min(16, args.num_workers)) as executor:
+        with ProcessPoolExecutor(max_workers=args.num_workers) as executor:
             futures = {executor.submit(_run_ls, (copy.deepcopy(dp), pars, elite_sa_steps)): dp for dp in top_transformer}
             for future in tqdm(as_completed(futures), total=len(futures), desc="Exploring Top 100"):
                 try:
