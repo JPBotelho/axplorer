@@ -60,8 +60,15 @@ def run_background_cpu_work(classname, pool, args, stop_event):
 
     # Use at most 50% of cores for background work to avoid starving GPU training
     max_bg_workers = max(1, args.num_workers // 2)
-    n_workers_gen = args.bg_workers_gen or max_bg_workers // 2
-    n_workers_ls = args.bg_workers_ls or max_bg_workers - n_workers_gen
+    if args.bg_generation and args.bg_local_search:
+        n_workers_gen = args.bg_workers_gen or max_bg_workers // 2
+        n_workers_ls = args.bg_workers_ls or max_bg_workers - n_workers_gen
+    elif args.bg_generation:
+        n_workers_gen = args.bg_workers_gen or max_bg_workers
+        n_workers_ls = 0
+    else:
+        n_workers_gen = 0
+        n_workers_ls = args.bg_workers_ls or max_bg_workers
     logger.info(f"[BG] Using {n_workers_gen} gen + {n_workers_ls} LS workers (of {args.num_workers} total)")
 
     def _run_generation():
