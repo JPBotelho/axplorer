@@ -32,6 +32,43 @@ def _run_ls(dp_and_pars):
     return dp
 
 
+def _run_crossover_ls(dp_and_pars):
+    """Combine two high-scoring graphs: keep edges they agree on, randomize disagreements, then LS."""
+    dp1, dp2, pars, sa_steps = dp_and_pars
+    dp1.__class__._update_class_params(pars)
+    dp1 = copy.deepcopy(dp1)
+    dp2 = copy.deepcopy(dp2)
+    n = dp1.N
+    # Where they agree, keep; where they disagree, randomize
+    for i in range(n):
+        for j in range(i + 1, n):
+            if dp1.data[i, j] != dp2.data[i, j]:
+                val = np.random.randint(2)
+                if val != dp1.data[i, j]:
+                    dp1._flip_edge(i, j)
+    dp1.calc_score()
+    dp1.calc_features()
+    dp1.local_search_fast_v2(sa_steps=sa_steps)
+    return dp1
+
+
+def _run_double_bridge_ls(dp_and_pars):
+    """Apply double-bridge perturbation (4 simultaneous edge flips), then LS."""
+    dp, pars, sa_steps = dp_and_pars
+    dp.__class__._update_class_params(pars)
+    dp = copy.deepcopy(dp)
+    n = dp.N
+    all_pairs = [(i, j) for i in range(n) for j in range(i + 1, n)]
+    # Pick 4 random distinct edges and flip them all — guaranteed non-local move
+    chosen = [all_pairs[k] for k in np.random.choice(len(all_pairs), size=4, replace=False)]
+    for i, j in chosen:
+        dp._flip_edge(i, j)
+    dp.calc_score()
+    dp.calc_features()
+    dp.local_search_fast_v2(sa_steps=sa_steps)
+    return dp
+
+
 def _run_targeted_ls(dp_and_pars):
     """Flip the worst clique-causing edges, then run LS. Targeted escape from local minima."""
     dp, pars, sa_steps, n_flip = dp_and_pars
@@ -118,9 +155,12 @@ def run_background_cpu_work(classname, pool, args, stop_event, max_score=None):
     # Reserve cores for elite and targeted search if LS is enabled
     n_elite_workers = args.bg_workers_elite if args.bg_workers_elite > 0 else 4
     n_targeted_workers = args.bg_workers_targeted if args.bg_workers_targeted > 0 else 2
-    if args.bg_local_search and n_workers_ls > n_elite_workers + n_targeted_workers:
-        n_workers_ls -= (n_elite_workers + n_targeted_workers)
-    logger.info(f"[BG] Using {n_workers_gen} gen + {n_workers_ls} LS + {n_elite_workers} elite + {n_targeted_workers} targeted workers (of {args.num_workers} total)")
+    n_crossover_workers = args.bg_workers_crossover if args.bg_workers_crossover > 0 else 2
+    n_double_bridge_workers = args.bg_workers_double_bridge if args.bg_workers_double_bridge > 0 else 2
+    reserved = n_elite_workers + n_targeted_workers + n_crossover_workers + n_double_bridge_workers
+    if args.bg_local_search and n_workers_ls > reserved:
+        n_workers_ls -= reserved
+    logger.info(f"[BG] Using {n_workers_gen} gen + {n_workers_ls} LS + {n_elite_workers} elite + {n_targeted_workers} targeted + {n_crossover_workers} crossover + {n_double_bridge_workers} double-bridge workers (of {args.num_workers} total)")
 
     def _run_generation():
         if not args.bg_generation or n_workers_gen < 1:
@@ -171,8 +211,8 @@ def run_background_cpu_work(classname, pool, args, stop_event, max_score=None):
         if not args.bg_local_search or n_workers_ls < 1:
             return
         pars = classname._save_class_params()
-        bg_mult = args.ls_sa_mult_bg if args.ls_sa_mult_bg > 0 else args.ls_sa_mult
-        sa_steps = args.N * args.N * bg_mult
+        ls_mult = args.ls_sa_mult_bg_ls if args.ls_sa_mult_bg_ls > 0 else (args.ls_sa_mult_bg if args.ls_sa_mult_bg > 0 else args.ls_sa_mult)
+        sa_steps = args.N * args.N * ls_mult
         n_done = 0
         n_pass = 0
 
@@ -333,6 +373,102 @@ def run_background_cpu_work(classname, pool, args, stop_event, max_score=None):
             _kill_executor(executor)
         logger.info(f"[BG-TARGETED] Finished: {n_done} total searched")
 
+    def _run_crossover_search():
+        """Combine pairs of top-100 graphs, randomize disagreements, then run LS."""
+        pars = classname._save_class_params()
+        bg_mult = args.ls_sa_mult_bg if args.ls_sa_mult_bg > 0 else args.ls_sa_mult
+        sa_steps = args.N * args.N * bg_mult * 10
+        n_done = 0
+
+        executor = ProcessPoolExecutor(max_workers=n_crossover_workers)
+        try:
+            pending = set()
+            for _ in range(n_crossover_workers * 2):
+                if stop_event.is_set():
+                    break
+                with data_lock:
+                    all_candidates = list(pool) + list(ls_results)
+                elite = sorted(all_candidates, key=lambda d: d.score, reverse=True)[:100]
+                dp1 = copy.deepcopy(elite[np.random.randint(len(elite))])
+                dp2 = copy.deepcopy(elite[np.random.randint(len(elite))])
+                pending.add(executor.submit(_run_crossover_ls, (dp1, dp2, pars, sa_steps)))
+
+            while pending and not stop_event.is_set():
+                done, pending = _wait_any(pending, timeout=0.5)
+                for future in done:
+                    try:
+                        dp = future.result()
+                    except Exception as e:
+                        print(f"[BG-CROSSOVER] Worker error: {e}", file=sys.stderr)
+                        continue
+                    with data_lock:
+                        if dp.features not in seen_features:
+                            seen_features.add(dp.features)
+                            ls_results.append(dp)
+                            if dp.score > top10_scores[-1]:
+                                top10_scores.append(dp.score)
+                                top10_scores.sort(reverse=True)
+                                del top10_scores[10:]
+                                print(f"[BG-CROSSOVER] NEW TOP-10! score={dp.score}{gap(dp.score)} (top10 min={top10_scores[-1]})")
+                    n_done += 1
+                    if not stop_event.is_set():
+                        with data_lock:
+                            all_candidates = list(pool) + list(ls_results)
+                        elite = sorted(all_candidates, key=lambda d: d.score, reverse=True)[:100]
+                        dp1 = copy.deepcopy(elite[np.random.randint(len(elite))])
+                        dp2 = copy.deepcopy(elite[np.random.randint(len(elite))])
+                        pending.add(executor.submit(_run_crossover_ls, (dp1, dp2, pars, sa_steps)))
+        finally:
+            _kill_executor(executor)
+        logger.info(f"[BG-CROSSOVER] Finished: {n_done} total searched")
+
+    def _run_double_bridge_search():
+        """Apply 4 simultaneous random edge flips, then run LS."""
+        pars = classname._save_class_params()
+        bg_mult = args.ls_sa_mult_bg if args.ls_sa_mult_bg > 0 else args.ls_sa_mult
+        sa_steps = args.N * args.N * bg_mult * 10
+        n_done = 0
+
+        executor = ProcessPoolExecutor(max_workers=n_double_bridge_workers)
+        try:
+            pending = set()
+            for _ in range(n_double_bridge_workers * 2):
+                if stop_event.is_set():
+                    break
+                with data_lock:
+                    all_candidates = list(pool) + list(ls_results)
+                elite = sorted(all_candidates, key=lambda d: d.score, reverse=True)[:100]
+                dp = copy.deepcopy(elite[np.random.randint(len(elite))])
+                pending.add(executor.submit(_run_double_bridge_ls, (dp, pars, sa_steps)))
+
+            while pending and not stop_event.is_set():
+                done, pending = _wait_any(pending, timeout=0.5)
+                for future in done:
+                    try:
+                        dp = future.result()
+                    except Exception as e:
+                        print(f"[BG-DBRIDGE] Worker error: {e}", file=sys.stderr)
+                        continue
+                    with data_lock:
+                        if dp.features not in seen_features:
+                            seen_features.add(dp.features)
+                            ls_results.append(dp)
+                            if dp.score > top10_scores[-1]:
+                                top10_scores.append(dp.score)
+                                top10_scores.sort(reverse=True)
+                                del top10_scores[10:]
+                                print(f"[BG-DBRIDGE] NEW TOP-10! score={dp.score}{gap(dp.score)} (top10 min={top10_scores[-1]})")
+                    n_done += 1
+                    if not stop_event.is_set():
+                        with data_lock:
+                            all_candidates = list(pool) + list(ls_results)
+                        elite = sorted(all_candidates, key=lambda d: d.score, reverse=True)[:100]
+                        dp = copy.deepcopy(elite[np.random.randint(len(elite))])
+                        pending.add(executor.submit(_run_double_bridge_ls, (dp, pars, sa_steps)))
+        finally:
+            _kill_executor(executor)
+        logger.info(f"[BG-DBRIDGE] Finished: {n_done} total searched")
+
     # Run generation and LS in separate threads (each manages its own ProcessPoolExecutor)
     threads = []
     if args.bg_generation:
@@ -342,6 +478,10 @@ def run_background_cpu_work(classname, pool, args, stop_event, max_score=None):
         t = threading.Thread(target=_run_elite_search, name="bg-elite")
         threads.append(t)
         t = threading.Thread(target=_run_targeted_search, name="bg-targeted")
+        threads.append(t)
+        t = threading.Thread(target=_run_crossover_search, name="bg-crossover")
+        threads.append(t)
+        t = threading.Thread(target=_run_double_bridge_search, name="bg-dbridge")
         threads.append(t)
         t = threading.Thread(target=_run_local_search, name="bg-ls")
         threads.append(t)
@@ -419,8 +559,11 @@ def get_parser():
     parser.add_argument("--bg_workers_ls", type=int, default=0, help="CPU cores for background local search (0 = num_workers // 2)")
     parser.add_argument("--bg_workers_elite", type=int, default=0, help="CPU cores for elite search (0 = 4)")
     parser.add_argument("--bg_workers_targeted", type=int, default=0, help="CPU cores for targeted edge perturbation search (0 = 2)")
+    parser.add_argument("--bg_workers_crossover", type=int, default=0, help="CPU cores for crossover search (0 = 2)")
+    parser.add_argument("--bg_workers_double_bridge", type=int, default=0, help="CPU cores for double-bridge search (0 = 2)")
     parser.add_argument("--ls_sa_mult", type=int, default=10, help="SA steps multiplier for post-generation scoring: total steps = N^2 * this value")
-    parser.add_argument("--ls_sa_mult_bg", type=int, default=0, help="SA steps multiplier for background LS (0 = same as --ls_sa_mult)")
+    parser.add_argument("--ls_sa_mult_bg", type=int, default=0, help="SA steps multiplier for background elite/targeted/crossover/double-bridge (0 = same as --ls_sa_mult)")
+    parser.add_argument("--ls_sa_mult_bg_ls", type=int, default=0, help="SA steps multiplier for regular background LS (0 = same as --ls_sa_mult_bg)")
 
     return parser
 
