@@ -185,7 +185,7 @@ def generate_and_score(args, classname, train_data_path=None, test_data_path=Non
         scores = np.array([d.score for d in data])
         logger.info(f"gen_complete: {n_generated} generated | pool: {len(scores)} | max: {scores.max()} | mean: {scores.mean():.1f}")
         _write_top_dot()
-    return data
+    return data, found_max
 
 
 def select_best(n, data):
@@ -277,10 +277,15 @@ def load_initial_data(args, classname):
         train_set = pickle.load(open(train_data_path, "rb"))
         test_set = pickle.load(open(test_data_path, "rb"))
     else:
-        data = generate_and_score(args, classname=classname, train_data_path=train_data_path, test_data_path=test_data_path)
+        data, found_max = generate_and_score(args, classname=classname, train_data_path=train_data_path, test_data_path=test_data_path)
         test_set = []
         train_set = []
         train_set, test_set, _ = update_datasets(args, data, train_set, test_set, train_data_path, test_data_path)
+        if found_max:
+            perfect = [d for d in train_set if d.score >= classname.max_possible_score(args.N)]
+            logger.info(f"Perfect graph(s) found during generation ({len(perfect)} total). Saved to {train_data_path}. Exiting.")
+            import sys
+            sys.exit(0)
     return train_set, test_set
 
 
