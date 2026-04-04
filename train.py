@@ -34,19 +34,12 @@ def _run_ls(dp_and_pars):
 def _kill_executor(executor):
     """Force-kill all worker processes in an executor, then shutdown."""
     import signal
-    pids = list(executor._processes.keys())
-    for pid in pids:
+    for pid in list(executor._processes.keys()):
         try:
             os.kill(pid, signal.SIGKILL)
         except (ProcessLookupError, OSError):
             pass
-    # Reap zombie processes
-    for pid in pids:
-        try:
-            os.waitpid(pid, 0)
-        except ChildProcessError:
-            pass
-    executor.shutdown(wait=False, cancel_futures=True)
+    executor.shutdown(wait=True, cancel_futures=True)
 
 
 def run_background_cpu_work(classname, pool, args, stop_event):
