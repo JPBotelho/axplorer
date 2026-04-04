@@ -59,9 +59,9 @@ def run_background_cpu_work(classname, pool, args, stop_event):
         pars = classname._save_class_params()
         batch_size = 1000
         n_gen = 0
-        with ProcessPoolExecutor(max_workers=n_workers_gen) as executor:
+        executor = ProcessPoolExecutor(max_workers=n_workers_gen)
+        try:
             pending = set()
-            # Submit initial batch of tasks
             for _ in range(n_workers_gen * 2):
                 if stop_event.is_set():
                     break
@@ -88,14 +88,11 @@ def run_background_cpu_work(classname, pool, args, stop_event):
                                         del top10_scores[10:]
                                         print(f"[BG-GEN] NEW TOP-10! score={dp.score} (top10 min={top10_scores[-1]})")
                     n_gen += batch_size
-                    # Submit replacement task
                     if not stop_event.is_set():
                         f = executor.submit(classname._batch_generate_and_score, batch_size, args.N, pars, args.per_batch_top_k)
                         pending.add(f)
-
-            # Cancel remaining futures instead of waiting
-            for f in pending:
-                f.cancel()
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
         logger.info(f"[BG-GEN] Finished: {n_gen} generated, {len(generated)} unique kept")
 
     def _run_local_search():
