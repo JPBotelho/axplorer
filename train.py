@@ -171,7 +171,8 @@ def run_background_cpu_work(classname, pool, args, stop_event, max_score=None):
         if not args.bg_local_search or n_workers_ls < 1:
             return
         pars = classname._save_class_params()
-        sa_steps = args.N * args.N * args.ls_sa_mult
+        bg_mult = args.ls_sa_mult_bg if args.ls_sa_mult_bg > 0 else args.ls_sa_mult
+        sa_steps = args.N * args.N * bg_mult
         n_done = 0
         n_pass = 0
 
@@ -240,7 +241,8 @@ def run_background_cpu_work(classname, pool, args, stop_event, max_score=None):
     def _run_elite_search():
         """Dedicate 4 cores to continuously searching the current top-5 scores (dynamic)."""
         pars = classname._save_class_params()
-        sa_steps = args.N * args.N * args.ls_sa_mult * 10  # 10x more SA effort for elite
+        bg_mult = args.ls_sa_mult_bg if args.ls_sa_mult_bg > 0 else args.ls_sa_mult
+        sa_steps = args.N * args.N * bg_mult * 10  # 10x more SA effort for elite
         n_done = 0
 
         executor = ProcessPoolExecutor(max_workers=n_elite_workers)
@@ -284,7 +286,8 @@ def run_background_cpu_work(classname, pool, args, stop_event, max_score=None):
     def _run_targeted_search():
         """2 cores dedicated to flipping worst clique edges then running LS."""
         pars = classname._save_class_params()
-        sa_steps = args.N * args.N * args.ls_sa_mult * 10
+        bg_mult = args.ls_sa_mult_bg if args.ls_sa_mult_bg > 0 else args.ls_sa_mult
+        sa_steps = args.N * args.N * bg_mult * 10
         n_flip = max(2, args.N // 10)  # flip ~10% of N worst edges
         n_done = 0
 
@@ -415,7 +418,8 @@ def get_parser():
     parser.add_argument("--bg_workers_gen", type=int, default=0, help="CPU cores for background generation (0 = num_workers // 2)")
     parser.add_argument("--bg_workers_ls", type=int, default=0, help="CPU cores for background local search (0 = num_workers // 2)")
     parser.add_argument("--bg_workers_elite", type=int, default=0, help="CPU cores for elite search (0 = 4)")
-    parser.add_argument("--ls_sa_mult", type=int, default=10, help="SA steps multiplier: total steps = N^2 * this value")
+    parser.add_argument("--ls_sa_mult", type=int, default=10, help="SA steps multiplier for post-generation scoring: total steps = N^2 * this value")
+    parser.add_argument("--ls_sa_mult_bg", type=int, default=0, help="SA steps multiplier for background LS (0 = same as --ls_sa_mult)")
 
     return parser
 
