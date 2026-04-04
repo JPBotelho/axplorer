@@ -89,10 +89,13 @@ def run_background_cpu_work(classname, pool, args, stop_event):
                                         print(f"[BG-GEN] NEW TOP-10! score={dp.score} (top10 min={top10_scores[-1]})")
                     n_gen += batch_size
                     if not stop_event.is_set():
-                        f = executor.submit(classname._batch_generate_and_score, batch_size, args.N, pars, args.per_batch_top_k)
-                        pending.add(f)
+                        try:
+                            f = executor.submit(classname._batch_generate_and_score, batch_size, args.N, pars, args.per_batch_top_k)
+                            pending.add(f)
+                        except RuntimeError:
+                            break
         finally:
-            executor.shutdown(wait=False, cancel_futures=True)
+            executor.shutdown(wait=True, cancel_futures=True)
         logger.info(f"[BG-GEN] Finished: {n_gen} generated, {len(generated)} unique kept")
 
     def _run_local_search():
@@ -107,7 +110,6 @@ def run_background_cpu_work(classname, pool, args, stop_event):
         try:
             while not stop_event.is_set():
                 n_pass += 1
-                # Each pass: search the current best graphs (pool + any LS improvements found so far)
                 with data_lock:
                     all_candidates = list(pool) + list(ls_results)
                 top_pool = sorted(all_candidates, key=lambda d: d.score, reverse=True)[:min(len(all_candidates), 5000)]
@@ -135,7 +137,7 @@ def run_background_cpu_work(classname, pool, args, stop_event):
 
                 logger.info(f"[BG-LS] Pass {n_pass} done: {n_done} total searched, {len(ls_results)} unique improved")
         finally:
-            executor.shutdown(wait=False, cancel_futures=True)
+            executor.shutdown(wait=True, cancel_futures=True)
 
         logger.info(f"[BG-LS] Finished: {n_pass} passes, {n_done} searched, {len(ls_results)} unique improved")
 
