@@ -194,9 +194,7 @@ def main():
                         help="number of candidate edges to consider for 2-flip pairs (K^2/2 pair tests)")
     parser.add_argument("--kempe_chain_len", type=int, default=12,
                         help="ejection chain length (number of flips in the chain)")
-    parser.add_argument("--save_interval", type=int, default=60)
-    parser.add_argument("--max_pool_size", type=int, default=10000,
-                        help="cap pool size; 0 = unbounded")
+    # (no --save_interval — we only save on new best or on exit)
     args = parser.parse_args()
 
     out_path = args.out or args.pkl
@@ -265,7 +263,6 @@ def main():
 
             n_added = 0
             n_improved = 0
-            last_save = time.time()
             pass_start = time.time()
 
             print(f"\n=== Pass {pass_num} | frontier: {len(frontier)} at {max_score_val} "
@@ -303,32 +300,25 @@ def main():
                     n_improved += 1
                     print(f"\n  *** [{label}] NEW BEST: {dp.score} "
                           f"(gap={max_possible - dp.score}) ***", flush=True)
-
-                    if time.time() - last_save >= args.save_interval:
-                        pool.sort(key=lambda d: d.score, reverse=True)
-                        _save(pool, out_path)
-                        last_save = time.time()
+                    # Save ONLY on a new best — we don't care about anything
+                    # else, and save_interval churn was slowing the search.
+                    pool.sort(key=lambda d: d.score, reverse=True)
+                    _save(pool, out_path)
             finally:
                 if stop:
                     for f in futs:
                         f.cancel()
 
             elapsed = time.time() - pass_start
-            pool.sort(key=lambda d: d.score, reverse=True)
-            if args.max_pool_size > 0 and len(pool) > args.max_pool_size:
-                dropped = len(pool) - args.max_pool_size
-                pool = pool[: args.max_pool_size]
-                seen_features = {d.features for d in pool}
-                seen_wl = {wl_hash(d.data) for d in pool}
-                print(f"  Capped pool at {args.max_pool_size} (dropped {dropped})")
             print(f"Pass {pass_num} done | {len(futs)/max(elapsed,1e-6):.1f} tasks/s "
-                  f"| added: {n_added} | new bests: {n_improved}")
-            print_dist(pool[:100], label="Pool top 100")
+                  f"| new bests this pass: {n_improved} | best overall: {best_score} "
+                  f"(gap={max_possible - best_score})")
             if strategy_hits:
                 print(f"Strategy hits: {dict(strategy_hits.most_common())}")
-            _save(pool, out_path)
-            print(f"Saved {len(pool)} graphs to {out_path}")
 
+    # Final save on exit (Ctrl+C).
+    pool.sort(key=lambda d: d.score, reverse=True)
+    _save(pool, out_path)
     print(f"\nDone. Final pool: {len(pool)} | best: {best_score} "
           f"(gap={max_possible - best_score})")
     if strategy_hits:
