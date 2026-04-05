@@ -159,6 +159,8 @@ def main():
     parser.add_argument("--frontier_k", type=int, default=50, help="number of frontier graphs to search from")
     parser.add_argument("--sa_mults", type=str, default="10,50,200", help="comma-separated SA depth multipliers")
     parser.add_argument("--save_interval", type=int, default=60)
+    parser.add_argument("--max_pool_size", type=int, default=10000,
+                        help="cap pool at this many graphs (keep top by score); 0 = unbounded")
     args = parser.parse_args()
 
     out_path = args.out or args.pkl
@@ -215,8 +217,15 @@ def main():
         last_save = time.time()
         pass_start = time.time()
 
+        # Count tasks per depth for visibility
+        depth_counts = Counter()
+        for _, _, label in tasks:
+            # label format: "<strategy>-<sa_mult>x" or "<strategy>-<n>f-<sa_mult>x"
+            depth_counts[label.rsplit("-", 1)[1]] += 1
+        depth_breakdown = " ".join(f"{k}={v}" for k, v in sorted(depth_counts.items()))
+
         print(f"\n=== Pass {pass_num} | frontier: {len(frontier)} graphs at {max_score_val} "
-              f"(gap={max_possible - max_score_val}) | {len(tasks)} tasks | depths={sa_mults} ===")
+              f"(gap={max_possible - max_score_val}) | {len(tasks)} tasks | depths: {depth_breakdown} ===")
 
         with ProcessPoolExecutor(max_workers=args.num_workers, initializer=_worker_init) as executor:
             futures = {executor.submit(fn, task_args): label for fn, task_args, label in tasks}
@@ -259,6 +268,14 @@ def main():
 
         elapsed = time.time() - pass_start
         pool.sort(key=lambda d: d.score, reverse=True)
+        if args.max_pool_size > 0 and len(pool) > args.max_pool_size:
+            dropped = len(pool) - args.max_pool_size
+            pool = pool[: args.max_pool_size]
+            # Rebuild seen sets so dedup stays consistent with the capped pool.
+            # (Otherwise seen sets grow unbounded and block re-discovery of trimmed graphs.)
+            seen_features = {d.features for d in pool}
+            seen_wl = {wl_hash(d.data) for d in pool}
+            print(f"  Capped pool at {args.max_pool_size} (dropped {dropped} lowest-score graphs)")
         print(f"Pass {pass_num} done | {len(tasks)/elapsed:.1f} tasks/s | added: {n_added} | new bests: {n_improved}")
         print_dist(pool[:100], label="Pool top 100")
         if strategy_hits:
