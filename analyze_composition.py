@@ -2,7 +2,7 @@
 Score-composition breakdown for a Ramsey pool.
 
 Usage:
-    python analyze_composition.py --pkl checkpoint/r46_n36/r46_n36/<exp_id>/train_data.pkl
+    python analyze_composition.py --pkl <train_data.pkl> --s 4 --t 6
 """
 
 import argparse
@@ -34,71 +34,67 @@ def count_for(dp, N, S, T):
 
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--pkl", required=True)
-    parser.add_argument("--sample", type=int, default=500,
-                        help="how many top-tier graphs to profile for the distribution")
-    args = parser.parse_args()
+    p = argparse.ArgumentParser()
+    p.add_argument("--pkl", required=True)
+    p.add_argument("--s", type=int, default=4, help="size of red clique (K_s)")
+    p.add_argument("--t", type=int, default=6, help="size of blue clique (K_t)")
+    p.add_argument("--sample", type=int, default=500,
+                   help="top-tier graphs to profile")
+    args = p.parse_args()
 
     print(f"Loading {args.pkl} ...")
     data = pickle.load(open(args.pkl, "rb"))
     data.sort(key=lambda d: d.score, reverse=True)
-    print(f"Loaded {len(data)} graphs")
-
     N = data[0].N
-    S, T = RamseyDataPoint.S, RamseyDataPoint.T
+    S, T = args.s, args.t
+
+    # CRITICAL: set class params so clique counting uses the right S,T.
+    RamseyDataPoint.S = S
+    RamseyDataPoint.T = T
+    RamseyDataPoint.N = N
+
     max_ks = math.comb(N, S)
     max_kt = math.comb(N, T)
     max_total = max_ks + max_kt
+    print(f"Loaded {len(data)} graphs | N={N} S={S} T={T}")
+    print(f"max = C({N},{S}) + C({N},{T}) = {max_ks} + {max_kt} = {max_total}")
 
-    print(f"\nN={N}  S={S}  T={T}")
-    print(f"max K{S} count  = C({N},{S}) = {max_ks}")
-    print(f"max K{T} count  = C({N},{T}) = {max_kt}")
-    print(f"max total score = {max_total}")
-
-    # Best graph
+    # ── Best graph ───────────────────────────────────────────────────────────
     best = data[0]
     ks, kt = count_for(best, N, S, T)
-    print(f"\n── BEST graph  (score={best.score}, gap={max_total - best.score}) ──")
-    print(f"  red  K{S} violations  = {ks:>6}  /  {max_ks} max")
-    print(f"  blue K{T} violations  = {kt:>6}  /  {max_kt} max")
-    print(f"  score from non-K{S}   = {max_ks - ks:>6}  "
-          f"({100*(max_ks - ks)/max_total:5.2f}% of max, "
-          f"{100*(max_ks - ks)/best.score:5.2f}% of actual score)")
-    print(f"  score from non-K{T}   = {max_kt - kt:>6}  "
-          f"({100*(max_kt - kt)/max_total:5.2f}% of max, "
-          f"{100*(max_kt - kt)/best.score:5.2f}% of actual score)")
-    print(f"  violations ratio       K{S}:K{T} = {ks}:{kt}")
+    gap = max_total - best.score
+    print(f"\n── BEST ── score={best.score}  gap={gap}")
+    print(f"  red  K{S} violations = {ks:>5} / {max_ks}")
+    print(f"  blue K{T} violations = {kt:>5} / {max_kt}")
+    print(f"  gap split: K{S}={ks} ({100*ks/max(gap,1):.1f}% of gap)  "
+          f"K{T}={kt} ({100*kt/max(gap,1):.1f}% of gap)")
 
-    # Distribution over top tier
+    # ── Top tier summary ─────────────────────────────────────────────────────
     top_tier = [d for d in data if d.score == best.score]
-    print(f"\n── Top-tier analysis  (score={best.score}) ──")
-    print(f"Top-tier has {len(top_tier)} graphs")
-
     sample = top_tier[: min(args.sample, len(top_tier))]
     ks_list, kt_list = [], []
     for d in sample:
         a, b = count_for(d, N, S, T)
-        ks_list.append(a)
-        kt_list.append(b)
+        ks_list.append(a); kt_list.append(b)
+    ks_arr = np.array(ks_list); kt_arr = np.array(kt_list)
 
-    print(f"\nOver {len(sample)} top-tier graphs:")
-    print(f"  K{S} violations:  min={min(ks_list)}  max={max(ks_list)}  "
-          f"mean={np.mean(ks_list):.2f}")
-    print(f"  K{T} violations:  min={min(kt_list)}  max={max(kt_list)}  "
-          f"mean={np.mean(kt_list):.2f}")
+    print(f"\n── TOP TIER ── score={best.score}, {len(top_tier)} graphs "
+          f"(profiled {len(sample)})")
+    print(f"  K{S} violations: min={ks_arr.min()} max={ks_arr.max()} "
+          f"mean={ks_arr.mean():.2f}")
+    print(f"  K{T} violations: min={kt_arr.min()} max={kt_arr.max()} "
+          f"mean={kt_arr.mean():.2f}")
 
     pairs = Counter(zip(ks_list, kt_list))
-    print(f"\n  (K{S}, K{T}) distribution:")
-    for (a, b), c in sorted(pairs.items()):
-        pct = 100.0 * c / len(sample)
-        print(f"    ({a:>3}, {b:>3}):  x{c:<5}  {pct:5.1f}%")
+    print(f"  most common (K{S},K{T}) splits:")
+    for (a, b), c in pairs.most_common(5):
+        print(f"    ({a},{b}): x{c} ({100*c/len(sample):.1f}%)")
 
-    # Broader picture across score bands
-    print(f"\n── Score bands ──")
-    band_counts = Counter(d.score for d in data)
-    for score, cnt in sorted(band_counts.items(), reverse=True)[:15]:
-        print(f"  {score}  (gap={max_total - score}):  x{cnt}")
+    # ── Score bands near the best ────────────────────────────────────────────
+    print(f"\n── SCORE BANDS (top 10) ──")
+    bands = Counter(d.score for d in data)
+    for score, cnt in sorted(bands.items(), reverse=True)[:10]:
+        print(f"  {score}  gap={max_total - score:>4}  x{cnt}")
 
 
 if __name__ == "__main__":
