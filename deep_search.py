@@ -111,7 +111,8 @@ def main():
     print(f"Max possible score: {max_possible}")
 
     pool = list(data)  # start with full deduped pool, add improvements
-    seen = {d.features for d in pool}
+    seen_features = {d.features for d in pool}
+    seen_wl = {wl_hash(d.data) for d in tqdm(pool, desc="Building WL seen set")}
     best_score = max(d.score for d in pool)
 
     stop = False
@@ -146,13 +147,16 @@ def main():
                     print(f"  Worker error: {e}")
                     continue
 
-                if dp.features not in seen:
-                    seen.add(dp.features)
-                    pool.append(dp)
-                    n_added += 1
-                    if dp.score > best_score:
-                        best_score = dp.score
-                        print(f"  *** NEW BEST: {dp.score} (gap={max_possible - dp.score}) ***", flush=True)
+                if dp.features not in seen_features:
+                    h = wl_hash(dp.data)
+                    if h not in seen_wl:
+                        seen_features.add(dp.features)
+                        seen_wl.add(h)
+                        pool.append(dp)
+                        n_added += 1
+                        if dp.score > best_score:
+                            best_score = dp.score
+                            print(f"  *** NEW BEST: {dp.score} (gap={max_possible - dp.score}) ***", flush=True)
 
                 if time.time() - last_save >= args.save_interval:
                     pool.sort(key=lambda d: d.score, reverse=True)
