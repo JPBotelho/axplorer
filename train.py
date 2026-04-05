@@ -478,8 +478,8 @@ def run_background_cpu_work(classname, pool, args, stop_event, max_score=None):
         if n_super_elite_workers < 1:
             return
         pars = classname._save_class_params()
-        bg_mult = args.ls_sa_mult_bg if args.ls_sa_mult_bg > 0 else args.ls_sa_mult
-        sa_steps = args.N * args.N * bg_mult * 1000
+        se_mult = args.ls_sa_mult_super_elite if args.ls_sa_mult_super_elite > 0 else (args.ls_sa_mult_bg if args.ls_sa_mult_bg > 0 else args.ls_sa_mult)
+        sa_steps = args.N * args.N * se_mult
         n_done = 0
         n_improved = 0
 
@@ -618,6 +618,7 @@ def get_parser():
     parser.add_argument("--bg_workers_crossover", type=int, default=0, help="CPU cores for crossover search (0 = 2)")
     parser.add_argument("--bg_workers_double_bridge", type=int, default=0, help="CPU cores for double-bridge search (0 = 2)")
     parser.add_argument("--bg_workers_super_elite", type=int, default=0, help="CPU cores for super-elite search (0 = disabled); replaces elite/targeted/crossover/dbridge when set")
+    parser.add_argument("--ls_sa_mult_super_elite", type=int, default=0, help="SA steps multiplier for super-elite background search (0 = same as --ls_sa_mult_bg)")
     parser.add_argument("--ls_sa_mult", type=int, default=10, help="SA steps multiplier for post-generation scoring: total steps = N^2 * this value")
     parser.add_argument("--ls_sa_mult_bg", type=int, default=0, help="SA steps multiplier for background elite/targeted/crossover/double-bridge (0 = same as --ls_sa_mult)")
     parser.add_argument("--ls_sa_mult_bg_ls", type=int, default=0, help="SA steps multiplier for regular background LS (0 = same as --ls_sa_mult_bg)")
