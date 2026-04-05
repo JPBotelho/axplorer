@@ -232,89 +232,105 @@ def main():
 
     signal.signal(signal.SIGINT, _handle_sigint)
 
-    pass_num = 0
     strategy_hits = Counter()
 
-    # Two dedicated executors running concurrently.
+    def pick_frontier():
+        """Choose a fresh random frontier from the current top tier."""
+        max_score_val = max(d.score for d in pool)
+        top_tier = [d for d in pool if d.score == max_score_val]
+        if len(top_tier) >= args.frontier_k:
+            idx = np.random.choice(len(top_tier), args.frontier_k, replace=False)
+            return [top_tier[i] for i in idx], max_score_val
+        return sorted(pool, key=lambda d: d.score, reverse=True)[: args.frontier_k], max_score_val
+
+    # Two dedicated executors running concurrently with CONTINUOUS submission:
+    # every time a task finishes we immediately submit a replacement, so the
+    # pools stay saturated and we never block on stragglers at a barrier.
+    from concurrent.futures import wait, FIRST_COMPLETED
+
     with ProcessPoolExecutor(max_workers=args.workers_two_flip, initializer=_worker_init) as exec_tf, \
          ProcessPoolExecutor(max_workers=args.workers_kempe, initializer=_worker_init) as exec_kc:
 
-        while not stop:
-            pass_num += 1
-            max_score_val = max(d.score for d in pool)
-            top_tier = [d for d in pool if d.score == max_score_val]
-            if len(top_tier) >= args.frontier_k:
-                idx = np.random.choice(len(top_tier), args.frontier_k, replace=False)
-                frontier = [top_tier[i] for i in idx]
-            else:
-                frontier = sorted(pool, key=lambda d: d.score, reverse=True)[: args.frontier_k]
+        frontier, front_score = pick_frontier()
+        print(f"\nFrontier: {len(frontier)} graphs at {front_score} "
+              f"(gap={max_possible - front_score})")
 
-            # Submit a full batch to each executor: one task per frontier graph
-            # per strategy. Each executor saturates its own 16 workers.
-            futs = {}
-            for dp in frontier:
-                f = exec_tf.submit(_run_two_flip,
-                                   (copy.deepcopy(dp), pars, sa_steps, args.two_flip_top_k))
-                futs[f] = "2flip"
-            for dp in frontier:
-                f = exec_kc.submit(_run_kempe_chain,
-                                   (copy.deepcopy(dp), pars, sa_steps, args.kempe_chain_len))
-                futs[f] = "kempe"
+        # target in-flight per pool: 2× workers so each pool always has a
+        # queue of work ready and submission overhead is amortized.
+        target_tf = args.workers_two_flip * 2
+        target_kc = args.workers_kempe * 2
 
-            n_added = 0
-            n_improved = 0
-            pass_start = time.time()
+        def submit_tf():
+            dp = frontier[np.random.randint(len(frontier))]
+            return exec_tf.submit(_run_two_flip,
+                                  (copy.deepcopy(dp), pars, sa_steps, args.two_flip_top_k))
 
-            print(f"\n=== Pass {pass_num} | frontier: {len(frontier)} at {max_score_val} "
-                  f"(gap={max_possible - max_score_val}) | {len(futs)} tasks "
-                  f"({len(frontier)} × 2 strategies) ===")
+        def submit_kc():
+            dp = frontier[np.random.randint(len(frontier))]
+            return exec_kc.submit(_run_kempe_chain,
+                                  (copy.deepcopy(dp), pars, sa_steps, args.kempe_chain_len))
 
-            try:
-                for future in tqdm(as_completed(futs), total=len(futs), desc=f"Pass {pass_num}"):
-                    if stop:
-                        break
-                    label = futs[future]
+        futs = {}
+        for _ in range(target_tf):
+            futs[submit_tf()] = "2flip"
+        for _ in range(target_kc):
+            futs[submit_kc()] = "kempe"
+
+        n_done = 0
+        n_improved = 0
+        last_log = time.time()
+        loop_start = time.time()
+        log_every_n = 200
+
+        try:
+            while not stop and futs:
+                done, _ = wait(list(futs.keys()), timeout=1.0, return_when=FIRST_COMPLETED)
+                if not done:
+                    continue
+                for future in done:
+                    label = futs.pop(future)
                     try:
                         dp = future.result()
                     except Exception as e:
                         print(f"  [{label}] worker error: {e}")
-                        continue
+                    else:
+                        n_done += 1
+                        if dp.score > best_score \
+                                and dp.features not in seen_features:
+                            h = wl_hash(dp.data)
+                            if h not in seen_wl:
+                                seen_features.add(dp.features)
+                                seen_wl.add(h)
+                                pool.append(dp)
+                                best_score = dp.score
+                                n_improved += 1
+                                strategy_hits[f"{label}-NEW-BEST"] += 1
+                                print(f"\n  *** [{label}] NEW BEST: {dp.score} "
+                                      f"(gap={max_possible - dp.score}) ***",
+                                      flush=True)
+                                pool.sort(key=lambda d: d.score, reverse=True)
+                                _save(pool, out_path)
+                                # Refresh frontier around the new best.
+                                frontier, front_score = pick_frontier()
+                    # Immediately submit a replacement to keep the pool full.
+                    if not stop:
+                        if label == "2flip":
+                            futs[submit_tf()] = "2flip"
+                        else:
+                            futs[submit_kc()] = "kempe"
 
-                    # Only keep STRICT improvements over the current best —
-                    # the pool is already saturated with same-score graphs and
-                    # we don't want to bloat it further.
-                    if dp.score <= best_score:
-                        continue
-                    if dp.features in seen_features:
-                        continue
-                    h = wl_hash(dp.data)
-                    if h in seen_wl:
-                        continue
-
-                    seen_features.add(dp.features)
-                    seen_wl.add(h)
-                    pool.append(dp)
-                    n_added += 1
-                    best_score = dp.score
-                    strategy_hits[f"{label}-NEW-BEST"] += 1
-                    n_improved += 1
-                    print(f"\n  *** [{label}] NEW BEST: {dp.score} "
-                          f"(gap={max_possible - dp.score}) ***", flush=True)
-                    # Save ONLY on a new best — we don't care about anything
-                    # else, and save_interval churn was slowing the search.
-                    pool.sort(key=lambda d: d.score, reverse=True)
-                    _save(pool, out_path)
-            finally:
-                if stop:
-                    for f in futs:
-                        f.cancel()
-
-            elapsed = time.time() - pass_start
-            print(f"Pass {pass_num} done | {len(futs)/max(elapsed,1e-6):.1f} tasks/s "
-                  f"| new bests this pass: {n_improved} | best overall: {best_score} "
-                  f"(gap={max_possible - best_score})")
-            if strategy_hits:
-                print(f"Strategy hits: {dict(strategy_hits.most_common())}")
+                # Periodic status line
+                if n_done - (n_done % log_every_n) >= log_every_n and \
+                   time.time() - last_log > 5:
+                    elapsed = time.time() - loop_start
+                    rate = n_done / max(elapsed, 1e-6)
+                    print(f"  [{n_done} done | {rate:.1f} tasks/s | "
+                          f"new bests: {n_improved} | best: {best_score} "
+                          f"(gap={max_possible - best_score})]", flush=True)
+                    last_log = time.time()
+        finally:
+            for f in list(futs.keys()):
+                f.cancel()
 
     # Final save on exit (Ctrl+C).
     pool.sort(key=lambda d: d.score, reverse=True)
