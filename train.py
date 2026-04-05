@@ -756,6 +756,8 @@ def get_parser():
     parser.add_argument("--ls_sa_mult", type=int, default=10, help="SA steps multiplier for post-generation scoring: total steps = N^2 * this value")
     parser.add_argument("--ls_sa_mult_bg", type=int, default=0, help="SA steps multiplier for background elite/targeted/crossover/double-bridge (0 = same as --ls_sa_mult)")
     parser.add_argument("--ls_sa_mult_bg_ls", type=int, default=0, help="SA steps multiplier for regular background LS (0 = same as --ls_sa_mult_bg)")
+    parser.add_argument("--elite_top_k", type=int, default=96, help="how many top transformer samples to run deep LS on (phase 1 of transformer-elite)")
+    parser.add_argument("--elite_depth_factor", type=int, default=1000, help="multiplier applied on top of bg_mult for transformer-elite SA depth: sa_steps = N^2 * bg_mult * this")
 
     return parser
 
@@ -903,11 +905,11 @@ if __name__ == "__main__":
         elif args.device == "mps":
             torch.mps.empty_cache()
 
-        # Deep LS on top 96 transformer samples
-        top_transformer = sorted(new_data, key=lambda d: d.score, reverse=True)[:96]
+        # Deep LS on top-K transformer samples
+        top_transformer = sorted(new_data, key=lambda d: d.score, reverse=True)[: args.elite_top_k]
         pars = classname._save_class_params()
         bg_mult = args.ls_sa_mult_bg if args.ls_sa_mult_bg > 0 else args.ls_sa_mult
-        elite_sa_steps = args.N * args.N * bg_mult * 1000
+        elite_sa_steps = args.N * args.N * bg_mult * args.elite_depth_factor
         overall_best = max((d.score for d in train_set), default=0)
         elite_explored = []
         with ProcessPoolExecutor(max_workers=args.num_workers) as executor:
