@@ -271,6 +271,7 @@ def run_background_cpu_work(classname, pool, args, stop_event, max_score=None):
         sa_steps = args.N * args.N * ls_mult
         n_done = 0
         n_pass = 0
+        n_improved = 0  # graphs THIS worker contributed
 
         executor = ProcessPoolExecutor(max_workers=n_workers_ls)
         try:
@@ -307,6 +308,7 @@ def run_background_cpu_work(classname, pool, args, stop_event, max_score=None):
                             if dp.features not in seen_features:
                                 seen_features.add(dp.features)
                                 ls_results.append(dp)
+                                n_improved += 1
                                 if dp.score > top10_scores[-1]:
                                     top10_scores.append(dp.score)
                                     top10_scores.sort(reverse=True)
@@ -318,11 +320,11 @@ def run_background_cpu_work(classname, pool, args, stop_event, max_score=None):
                         if t is not None and not stop_event.is_set():
                             pending.add(executor.submit(_run_ls, t))
 
-                logger.info(f"[BG-LS] Pass {n_pass} done: {n_done} total searched, {len(ls_results)} unique improved")
+                logger.info(f"[BG-LS] Pass {n_pass} done: {n_done} searched, {n_improved} unique from BG-LS")
         finally:
             _kill_executor(executor)
 
-        logger.info(f"[BG-LS] Finished: {n_pass} passes, {n_done} searched, {len(ls_results)} unique improved")
+        logger.info(f"[BG-LS] Finished: {n_pass} passes, {n_done} searched, {n_improved} unique from BG-LS")
 
     def _pick_elite_task(pars, sa_steps):
         """Pick a random graph from the current top-5 distinct scores."""
@@ -340,6 +342,7 @@ def run_background_cpu_work(classname, pool, args, stop_event, max_score=None):
         bg_mult = args.ls_sa_mult_bg if args.ls_sa_mult_bg > 0 else args.ls_sa_mult
         sa_steps = args.N * args.N * bg_mult * 10  # 10x more SA effort for elite
         n_done = 0
+        n_improved = 0
 
         executor = ProcessPoolExecutor(max_workers=n_elite_workers)
         try:
@@ -364,6 +367,7 @@ def run_background_cpu_work(classname, pool, args, stop_event, max_score=None):
                         if dp.features not in seen_features:
                             seen_features.add(dp.features)
                             ls_results.append(dp)
+                            n_improved += 1
                             if dp.score > top10_scores[-1]:
                                 top10_scores.append(dp.score)
                                 top10_scores.sort(reverse=True)
@@ -377,7 +381,7 @@ def run_background_cpu_work(classname, pool, args, stop_event, max_score=None):
                             pending.add(executor.submit(_run_ls, t))
         finally:
             _kill_executor(executor)
-        logger.info(f"[BG-ELITE] Finished: {n_done} total searched")
+        logger.info(f"[BG-ELITE] Finished: {n_done} searched, {n_improved} unique from BG-ELITE")
 
     def _run_targeted_search():
         """2 cores dedicated to flipping worst clique edges then running LS."""
@@ -386,6 +390,7 @@ def run_background_cpu_work(classname, pool, args, stop_event, max_score=None):
         sa_steps = args.N * args.N * bg_mult * 10
         n_flip = max(2, args.N // 10)  # flip ~10% of N worst edges
         n_done = 0
+        n_improved = 0
 
         executor = ProcessPoolExecutor(max_workers=n_targeted_workers)
         try:
@@ -413,6 +418,7 @@ def run_background_cpu_work(classname, pool, args, stop_event, max_score=None):
                         if dp.features not in seen_features:
                             seen_features.add(dp.features)
                             ls_results.append(dp)
+                            n_improved += 1
                             if dp.score > top10_scores[-1]:
                                 top10_scores.append(dp.score)
                                 top10_scores.sort(reverse=True)
@@ -427,7 +433,7 @@ def run_background_cpu_work(classname, pool, args, stop_event, max_score=None):
                         pending.add(executor.submit(_run_targeted_ls, (dp, pars, sa_steps, n_flip)))
         finally:
             _kill_executor(executor)
-        logger.info(f"[BG-TARGETED] Finished: {n_done} total searched")
+        logger.info(f"[BG-TARGETED] Finished: {n_done} searched, {n_improved} unique from BG-TARGETED")
 
     def _run_crossover_search():
         """Combine pairs of top-100 graphs, randomize disagreements, then run LS."""
@@ -435,6 +441,7 @@ def run_background_cpu_work(classname, pool, args, stop_event, max_score=None):
         bg_mult = args.ls_sa_mult_bg if args.ls_sa_mult_bg > 0 else args.ls_sa_mult
         sa_steps = args.N * args.N * bg_mult * 10
         n_done = 0
+        n_improved = 0
 
         executor = ProcessPoolExecutor(max_workers=n_crossover_workers)
         try:
@@ -461,6 +468,7 @@ def run_background_cpu_work(classname, pool, args, stop_event, max_score=None):
                         if dp.features not in seen_features:
                             seen_features.add(dp.features)
                             ls_results.append(dp)
+                            n_improved += 1
                             if dp.score > top10_scores[-1]:
                                 top10_scores.append(dp.score)
                                 top10_scores.sort(reverse=True)
@@ -476,7 +484,7 @@ def run_background_cpu_work(classname, pool, args, stop_event, max_score=None):
                         pending.add(executor.submit(_run_crossover_ls, (dp1, dp2, pars, sa_steps)))
         finally:
             _kill_executor(executor)
-        logger.info(f"[BG-CROSSOVER] Finished: {n_done} total searched")
+        logger.info(f"[BG-CROSSOVER] Finished: {n_done} searched, {n_improved} unique from BG-CROSSOVER")
 
     def _run_double_bridge_search():
         """Apply n_flips simultaneous random edge flips, then run LS."""
@@ -485,6 +493,7 @@ def run_background_cpu_work(classname, pool, args, stop_event, max_score=None):
         sa_steps = args.N * args.N * bg_mult * 10
         n_flips = args.dbridge_n_flips
         n_done = 0
+        n_improved = 0
 
         executor = ProcessPoolExecutor(max_workers=n_double_bridge_workers)
         try:
@@ -510,6 +519,7 @@ def run_background_cpu_work(classname, pool, args, stop_event, max_score=None):
                         if dp.features not in seen_features:
                             seen_features.add(dp.features)
                             ls_results.append(dp)
+                            n_improved += 1
                             if dp.score > top10_scores[-1]:
                                 top10_scores.append(dp.score)
                                 top10_scores.sort(reverse=True)
@@ -524,7 +534,7 @@ def run_background_cpu_work(classname, pool, args, stop_event, max_score=None):
                         pending.add(executor.submit(_run_double_bridge_ls, (dp, pars, sa_steps, n_flips)))
         finally:
             _kill_executor(executor)
-        logger.info(f"[BG-DBRIDGE] Finished: {n_done} total searched (n_flips={n_flips})")
+        logger.info(f"[BG-DBRIDGE] Finished: {n_done} searched, {n_improved} unique from BG-DBRIDGE (n_flips={n_flips})")
 
     def _make_bg_search_fn(worker_fn, n_workers, label, pick_two=False, extra_args=None):
         """Generic background search loop: pick from elite, perturb, LS, collect."""
@@ -533,6 +543,7 @@ def run_background_cpu_work(classname, pool, args, stop_event, max_score=None):
             bg_mult = args.ls_sa_mult_bg if args.ls_sa_mult_bg > 0 else args.ls_sa_mult
             sa_steps = args.N * args.N * bg_mult * 10
             n_done = 0
+            n_improved = 0
             executor = ProcessPoolExecutor(max_workers=n_workers)
             def _pick():
                 with data_lock:
@@ -566,6 +577,7 @@ def run_background_cpu_work(classname, pool, args, stop_event, max_score=None):
                             if dp.features not in seen_features:
                                 seen_features.add(dp.features)
                                 ls_results.append(dp)
+                                n_improved += 1
                                 if dp.score > top10_scores[-1]:
                                     top10_scores.append(dp.score)
                                     top10_scores.sort(reverse=True)
@@ -576,7 +588,7 @@ def run_background_cpu_work(classname, pool, args, stop_event, max_score=None):
                             pending.add(executor.submit(worker_fn, _pick()))
             finally:
                 _kill_executor(executor)
-            logger.info(f"[{label}] Finished: {n_done} total searched")
+            logger.info(f"[{label}] Finished: {n_done} searched, {n_improved} unique from {label}")
         return _search
 
     n_violation_workers = args.bg_workers_violation
