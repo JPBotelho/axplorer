@@ -283,6 +283,11 @@ def main():
                         print(f"  [{label}] worker error: {e}")
                         continue
 
+                    # Only keep STRICT improvements over the current best —
+                    # the pool is already saturated with same-score graphs and
+                    # we don't want to bloat it further.
+                    if dp.score <= best_score:
+                        continue
                     if dp.features in seen_features:
                         continue
                     h = wl_hash(dp.data)
@@ -293,14 +298,11 @@ def main():
                     seen_wl.add(h)
                     pool.append(dp)
                     n_added += 1
-                    if dp.score > best_score:
-                        best_score = dp.score
-                        strategy_hits[f"{label}-NEW-BEST"] += 1
-                        n_improved += 1
-                        print(f"\n  *** [{label}] NEW BEST: {dp.score} "
-                              f"(gap={max_possible - dp.score}) ***", flush=True)
-                    elif dp.score == max_score_val:
-                        strategy_hits[f"{label}-top"] += 1
+                    best_score = dp.score
+                    strategy_hits[f"{label}-NEW-BEST"] += 1
+                    n_improved += 1
+                    print(f"\n  *** [{label}] NEW BEST: {dp.score} "
+                          f"(gap={max_possible - dp.score}) ***", flush=True)
 
                     if time.time() - last_save >= args.save_interval:
                         pool.sort(key=lambda d: d.score, reverse=True)
