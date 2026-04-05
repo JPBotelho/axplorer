@@ -528,19 +528,17 @@ def run_background_cpu_work(classname, pool, args, stop_event, max_score=None):
         threads.append(t)
     if args.bg_local_search:
         if n_super_elite_workers > 0:
-            t = threading.Thread(target=_run_super_elite_search, name="bg-super-elite")
-            threads.append(t)
-        else:
-            t = threading.Thread(target=_run_elite_search, name="bg-elite")
-            threads.append(t)
-            t = threading.Thread(target=_run_targeted_search, name="bg-targeted")
-            threads.append(t)
-            t = threading.Thread(target=_run_crossover_search, name="bg-crossover")
-            threads.append(t)
-            t = threading.Thread(target=_run_double_bridge_search, name="bg-dbridge")
-            threads.append(t)
-        t = threading.Thread(target=_run_local_search, name="bg-ls")
-        threads.append(t)
+            threads.append(threading.Thread(target=_run_super_elite_search, name="bg-super-elite"))
+        if n_elite_workers > 0:
+            threads.append(threading.Thread(target=_run_elite_search, name="bg-elite"))
+        if n_targeted_workers > 0:
+            threads.append(threading.Thread(target=_run_targeted_search, name="bg-targeted"))
+        if n_crossover_workers > 0:
+            threads.append(threading.Thread(target=_run_crossover_search, name="bg-crossover"))
+        if n_double_bridge_workers > 0:
+            threads.append(threading.Thread(target=_run_double_bridge_search, name="bg-dbridge"))
+        if n_workers_ls > 0:
+            threads.append(threading.Thread(target=_run_local_search, name="bg-ls"))
 
     for t in threads:
         t.start()
