@@ -727,18 +727,26 @@ if __name__ == "__main__":
                 except Exception as e:
                     print(f"[EXPLORE] Worker error: {e}", file=sys.stderr)
 
-        # Phase 2: re-run graphs within 5 of overall best with same depth (2x total)
-        rerun_candidates = [dp for dp in elite_explored if dp.score >= overall_best - 5]
+        # Phase 2: fill exactly num_workers slots via round-robin over within-5 candidates
+        # SA is stochastic so re-running the same graph finds different local optima
+        rerun_candidates = sorted(
+            [dp for dp in elite_explored if dp.score >= overall_best - 5],
+            key=lambda d: d.score, reverse=True
+        )
         if rerun_candidates:
-            logger.info(f"[ELITE] Phase 2: re-running {len(rerun_candidates)} graphs with score >= {overall_best - 5} (overall_best={overall_best})")
+            n_slots = args.num_workers
+            tasks = [rerun_candidates[i % len(rerun_candidates)] for i in range(n_slots)]
+            logger.info(f"[ELITE] Phase 2: {len(rerun_candidates)} candidates (score >= {overall_best - 5}), filling {n_slots} slots round-robin (overall_best={overall_best})")
+            phase2_results = []  # (slot_idx, dp) to track best per unique graph
             with ProcessPoolExecutor(max_workers=args.num_workers) as executor:
-                futures = {executor.submit(_run_ls, (copy.deepcopy(dp), pars, elite_sa_steps)): dp for dp in rerun_candidates}
+                futures = {executor.submit(_run_ls, (copy.deepcopy(dp), pars, elite_sa_steps)): i for i, dp in enumerate(tasks)}
                 for future in tqdm(as_completed(futures), total=len(futures), desc="Transformer-elite phase 2"):
                     try:
                         dp = future.result()
-                        elite_explored.append(dp)
+                        phase2_results.append(dp)
                     except Exception as e:
                         print(f"[EXPLORE] Worker error: {e}", file=sys.stderr)
+            elite_explored.extend(phase2_results)
         else:
             logger.info(f"[ELITE] Phase 2: no graphs within 5 of overall best ({overall_best}), skipping")
 
