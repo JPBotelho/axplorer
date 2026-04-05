@@ -86,9 +86,9 @@ def main():
           f"mean={kt_arr.mean():.2f}")
 
     pairs = Counter(zip(ks_list, kt_list))
-    print(f"  most common (K{S},K{T}) splits:")
-    for (a, b), c in pairs.most_common(5):
-        print(f"    ({a},{b}): x{c} ({100*c/len(sample):.1f}%)")
+    print(f"  all (K{S},K{T}) splits ({len(pairs)} distinct):")
+    for (a, b), c in sorted(pairs.items()):
+        print(f"    ({a:>2},{b:>2}): x{c:<5} ({100*c/len(sample):5.1f}%)")
 
     # ── Score bands near the best ────────────────────────────────────────────
     print(f"\n── SCORE BANDS (top 10) ──")
