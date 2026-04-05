@@ -452,6 +452,12 @@ class RamseyDataPoint(DataPoint):
         n_pairs = len(all_pairs)
         deadline = (time.monotonic() + time_limit) if time_limit is not None else None
 
+        # Track best state seen during SA walk
+        best_score = self.score
+        best_data = self.data.copy()
+        best_adj = list(self.adj)
+        best_cadj = list(self.cadj)
+
         for step in range(sa_steps):
             if self.score == max_score:
                 break
@@ -463,6 +469,18 @@ class RamseyDataPoint(DataPoint):
             if delta > 0 or (T > T_min and rng.random() < math.exp(delta / T)):
                 _flip(i, j)
                 self.score += delta
+                if self.score > best_score:
+                    best_score = self.score
+                    best_data = self.data.copy()
+                    best_adj = list(self.adj)
+                    best_cadj = list(self.cadj)
+
+        # Restore best state seen during walk
+        if best_score > self.score:
+            self.score = best_score
+            self.data = best_data
+            self.adj = best_adj
+            self.cadj = best_cadj
 
         self.calc_features()
 
