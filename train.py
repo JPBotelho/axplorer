@@ -153,11 +153,11 @@ def run_background_cpu_work(classname, pool, args, stop_event, max_score=None):
         n_workers_gen = 0
         n_workers_ls = args.bg_workers_ls or max_bg_workers
     # Reserve cores for elite and targeted search if LS is enabled
-    n_super_elite_workers = args.bg_workers_super_elite
-    n_elite_workers = args.bg_workers_elite if args.bg_workers_elite > 0 else 4
-    n_targeted_workers = args.bg_workers_targeted if args.bg_workers_targeted > 0 else 2
-    n_crossover_workers = args.bg_workers_crossover if args.bg_workers_crossover > 0 else 2
-    n_double_bridge_workers = args.bg_workers_double_bridge if args.bg_workers_double_bridge > 0 else 2
+    n_super_elite_workers = args.bg_workers_super_elite if args.bg_workers_super_elite is not None else 0
+    n_elite_workers = args.bg_workers_elite if args.bg_workers_elite is not None else 4
+    n_targeted_workers = args.bg_workers_targeted if args.bg_workers_targeted is not None else 2
+    n_crossover_workers = args.bg_workers_crossover if args.bg_workers_crossover is not None else 2
+    n_double_bridge_workers = args.bg_workers_double_bridge if args.bg_workers_double_bridge is not None else 2
     reserved = n_elite_workers + n_targeted_workers + n_crossover_workers + n_double_bridge_workers
     if args.bg_local_search and args.bg_workers_ls == 0 and n_workers_ls > reserved:
         n_workers_ls -= reserved
@@ -613,11 +613,11 @@ def get_parser():
     parser.add_argument("--bg_local_search", type=bool_flag, default="false", help="run local search on pool during training")
     parser.add_argument("--bg_workers_gen", type=int, default=0, help="CPU cores for background generation (0 = num_workers // 2)")
     parser.add_argument("--bg_workers_ls", type=int, default=0, help="CPU cores for background local search (0 = num_workers // 2)")
-    parser.add_argument("--bg_workers_elite", type=int, default=0, help="CPU cores for elite search (0 = 4)")
-    parser.add_argument("--bg_workers_targeted", type=int, default=0, help="CPU cores for targeted edge perturbation search (0 = 2)")
-    parser.add_argument("--bg_workers_crossover", type=int, default=0, help="CPU cores for crossover search (0 = 2)")
-    parser.add_argument("--bg_workers_double_bridge", type=int, default=0, help="CPU cores for double-bridge search (0 = 2)")
-    parser.add_argument("--bg_workers_super_elite", type=int, default=0, help="CPU cores for super-elite search (0 = disabled); replaces elite/targeted/crossover/dbridge when set")
+    parser.add_argument("--bg_workers_elite", type=int, default=None, help="CPU cores for elite search (unset = 4, 0 = disabled)")
+    parser.add_argument("--bg_workers_targeted", type=int, default=None, help="CPU cores for targeted edge perturbation search (unset = 2, 0 = disabled)")
+    parser.add_argument("--bg_workers_crossover", type=int, default=None, help="CPU cores for crossover search (unset = 2, 0 = disabled)")
+    parser.add_argument("--bg_workers_double_bridge", type=int, default=None, help="CPU cores for double-bridge search (unset = 2, 0 = disabled)")
+    parser.add_argument("--bg_workers_super_elite", type=int, default=None, help="CPU cores for super-elite search (unset/0 = disabled); replaces elite/targeted/crossover/dbridge when set")
     parser.add_argument("--ls_sa_mult_super_elite", type=int, default=0, help="SA steps multiplier for super-elite background search (0 = same as --ls_sa_mult_bg)")
     parser.add_argument("--ls_sa_mult", type=int, default=10, help="SA steps multiplier for post-generation scoring: total steps = N^2 * this value")
     parser.add_argument("--ls_sa_mult_bg", type=int, default=0, help="SA steps multiplier for background elite/targeted/crossover/double-bridge (0 = same as --ls_sa_mult)")
