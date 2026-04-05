@@ -153,6 +153,7 @@ def run_background_cpu_work(classname, pool, args, stop_event, max_score=None):
         n_workers_gen = 0
         n_workers_ls = args.bg_workers_ls or max_bg_workers
     # Reserve cores for elite and targeted search if LS is enabled
+    n_super_elite_workers = args.bg_workers_super_elite
     n_elite_workers = args.bg_workers_elite if args.bg_workers_elite > 0 else 4
     n_targeted_workers = args.bg_workers_targeted if args.bg_workers_targeted > 0 else 2
     n_crossover_workers = args.bg_workers_crossover if args.bg_workers_crossover > 0 else 2
@@ -160,7 +161,10 @@ def run_background_cpu_work(classname, pool, args, stop_event, max_score=None):
     reserved = n_elite_workers + n_targeted_workers + n_crossover_workers + n_double_bridge_workers
     if args.bg_local_search and args.bg_workers_ls == 0 and n_workers_ls > reserved:
         n_workers_ls -= reserved
-    logger.info(f"[BG] Using {n_workers_gen} gen + {n_workers_ls} LS + {n_elite_workers} elite + {n_targeted_workers} targeted + {n_crossover_workers} crossover + {n_double_bridge_workers} double-bridge workers (of {args.num_workers} total)")
+    if n_super_elite_workers > 0:
+        logger.info(f"[BG] Using {n_workers_gen} gen + {n_workers_ls} LS + {n_super_elite_workers} super-elite workers (of {args.num_workers} total)")
+    else:
+        logger.info(f"[BG] Using {n_workers_gen} gen + {n_workers_ls} LS + {n_elite_workers} elite + {n_targeted_workers} targeted + {n_crossover_workers} crossover + {n_double_bridge_workers} double-bridge workers (of {args.num_workers} total)")
 
     def _run_generation():
         if not args.bg_generation or n_workers_gen < 1:
@@ -469,20 +473,72 @@ def run_background_cpu_work(classname, pool, args, stop_event, max_score=None):
             _kill_executor(executor)
         logger.info(f"[BG-DBRIDGE] Finished: {n_done} total searched")
 
+    def _run_super_elite_search():
+        """Throw all assigned vCPUs at random graphs from the current top score, looping until stop."""
+        if n_super_elite_workers < 1:
+            return
+        pars = classname._save_class_params()
+        bg_mult = args.ls_sa_mult_bg if args.ls_sa_mult_bg > 0 else args.ls_sa_mult
+        sa_steps = args.N * args.N * bg_mult * 1000
+        n_done = 0
+        n_improved = 0
+
+        executor = ProcessPoolExecutor(max_workers=n_super_elite_workers)
+        try:
+            while not stop_event.is_set():
+                with data_lock:
+                    all_candidates = list(pool) + list(ls_results)
+                if not all_candidates:
+                    break
+                current_best = max(d.score for d in all_candidates)
+                top_graphs = [d for d in all_candidates if d.score == current_best]
+                chosen = top_graphs[np.random.randint(len(top_graphs))]
+                # Submit n_super_elite_workers independent SA runs from the same starting graph
+                tasks = [(copy.deepcopy(chosen), pars, sa_steps) for _ in range(n_super_elite_workers)]
+                pending = {executor.submit(_run_ls, t) for t in tasks}
+                while pending and not stop_event.is_set():
+                    done, pending = _wait_any(pending, timeout=0.5)
+                    for future in done:
+                        try:
+                            dp = future.result()
+                        except Exception as e:
+                            print(f"[BG-SUPER-ELITE] Worker error: {e}", file=sys.stderr)
+                            continue
+                        n_done += 1
+                        with data_lock:
+                            if dp.features not in seen_features:
+                                seen_features.add(dp.features)
+                                ls_results.append(dp)
+                                n_improved += 1
+                                if dp.score > current_best:
+                                    print(f"[BG-SUPER-ELITE] NEW BEST! score={dp.score}{gap(dp.score)} (prev best={current_best})", flush=True)
+                                elif dp.score > top10_scores[-1]:
+                                    top10_scores.append(dp.score)
+                                    top10_scores.sort(reverse=True)
+                                    del top10_scores[10:]
+                                    print(f"[BG-SUPER-ELITE] NEW TOP-10! score={dp.score}{gap(dp.score)}", flush=True)
+        finally:
+            _kill_executor(executor)
+        logger.info(f"[BG-SUPER-ELITE] Finished: {n_done} searched, {n_improved} unique improved")
+
     # Run generation and LS in separate threads (each manages its own ProcessPoolExecutor)
     threads = []
     if args.bg_generation:
         t = threading.Thread(target=_run_generation, name="bg-gen")
         threads.append(t)
     if args.bg_local_search:
-        t = threading.Thread(target=_run_elite_search, name="bg-elite")
-        threads.append(t)
-        t = threading.Thread(target=_run_targeted_search, name="bg-targeted")
-        threads.append(t)
-        t = threading.Thread(target=_run_crossover_search, name="bg-crossover")
-        threads.append(t)
-        t = threading.Thread(target=_run_double_bridge_search, name="bg-dbridge")
-        threads.append(t)
+        if n_super_elite_workers > 0:
+            t = threading.Thread(target=_run_super_elite_search, name="bg-super-elite")
+            threads.append(t)
+        else:
+            t = threading.Thread(target=_run_elite_search, name="bg-elite")
+            threads.append(t)
+            t = threading.Thread(target=_run_targeted_search, name="bg-targeted")
+            threads.append(t)
+            t = threading.Thread(target=_run_crossover_search, name="bg-crossover")
+            threads.append(t)
+            t = threading.Thread(target=_run_double_bridge_search, name="bg-dbridge")
+            threads.append(t)
         t = threading.Thread(target=_run_local_search, name="bg-ls")
         threads.append(t)
 
@@ -561,6 +617,7 @@ def get_parser():
     parser.add_argument("--bg_workers_targeted", type=int, default=0, help="CPU cores for targeted edge perturbation search (0 = 2)")
     parser.add_argument("--bg_workers_crossover", type=int, default=0, help="CPU cores for crossover search (0 = 2)")
     parser.add_argument("--bg_workers_double_bridge", type=int, default=0, help="CPU cores for double-bridge search (0 = 2)")
+    parser.add_argument("--bg_workers_super_elite", type=int, default=0, help="CPU cores for super-elite search (0 = disabled); replaces elite/targeted/crossover/dbridge when set")
     parser.add_argument("--ls_sa_mult", type=int, default=10, help="SA steps multiplier for post-generation scoring: total steps = N^2 * this value")
     parser.add_argument("--ls_sa_mult_bg", type=int, default=0, help="SA steps multiplier for background elite/targeted/crossover/double-bridge (0 = same as --ls_sa_mult)")
     parser.add_argument("--ls_sa_mult_bg_ls", type=int, default=0, help="SA steps multiplier for regular background LS (0 = same as --ls_sa_mult_bg)")
