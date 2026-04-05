@@ -184,22 +184,24 @@ def main():
 
     stop = False
     pass_num = 0
-    main_pid = os.getpid()
     strategy_hits = Counter()
 
+    # Workers must ignore SIGINT — only main process handles it
+    original_sigint = signal.getsignal(signal.SIGINT)
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+
+    def _worker_init():
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
+
     def _handle_sigint(sig, frame):
-        if os.getpid() != main_pid:
-            return
-        pool.sort(key=lambda d: d.score, reverse=True)
-        _save(pool, out_path)
-        print(f"\nSaved {len(pool)} graphs to {out_path}")
-        print(f"\nStrategy hit counts: {dict(strategy_hits.most_common())}")
-        os._exit(0)
+        nonlocal stop
+        stop = True
+        print("\nCtrl+C received — finishing current batch then saving...", flush=True)
+
     signal.signal(signal.SIGINT, _handle_sigint)
 
     while not stop:
         pass_num += 1
-        # Pick frontier: random sample from top-score tier, or top-k if not enough
         max_score_val = max(d.score for d in pool)
         top_tier = [d for d in pool if d.score == max_score_val]
         if len(top_tier) >= args.frontier_k:
@@ -216,36 +218,44 @@ def main():
         print(f"\n=== Pass {pass_num} | frontier: {len(frontier)} graphs at {max_score_val} "
               f"(gap={max_possible - max_score_val}) | {len(tasks)} tasks | depths={sa_mults} ===")
 
-        with ProcessPoolExecutor(max_workers=args.num_workers) as executor:
+        with ProcessPoolExecutor(max_workers=args.num_workers, initializer=_worker_init) as executor:
             futures = {executor.submit(fn, task_args): label for fn, task_args, label in tasks}
-            for future in tqdm(as_completed(futures), total=len(futures), desc=f"Pass {pass_num}"):
-                label = futures[future]
-                try:
-                    dp = future.result()
-                except Exception as e:
-                    print(f"  [{label}] Worker error: {e}")
-                    continue
+            try:
+                for future in tqdm(as_completed(futures), total=len(futures), desc=f"Pass {pass_num}"):
+                    if stop:
+                        break
+                    label = futures[future]
+                    try:
+                        dp = future.result()
+                    except Exception as e:
+                        print(f"  [{label}] Worker error: {e}")
+                        continue
 
-                if dp.features not in seen_features:
-                    h = wl_hash(dp.data)
-                    if h not in seen_wl:
-                        seen_features.add(dp.features)
-                        seen_wl.add(h)
-                        pool.append(dp)
-                        n_added += 1
-                        if dp.score > best_score:
-                            best_score = dp.score
-                            strategy_hits[label] += 1
-                            n_improved += 1
-                            print(f"\n  *** [{label}] NEW BEST: {dp.score} (gap={max_possible - dp.score}) ***",
-                                  flush=True)
-                        elif dp.score == max_score_val:
-                            strategy_hits[label] += 1
+                    if dp.features not in seen_features:
+                        h = wl_hash(dp.data)
+                        if h not in seen_wl:
+                            seen_features.add(dp.features)
+                            seen_wl.add(h)
+                            pool.append(dp)
+                            n_added += 1
+                            if dp.score > best_score:
+                                best_score = dp.score
+                                strategy_hits[label] += 1
+                                n_improved += 1
+                                print(f"\n  *** [{label}] NEW BEST: {dp.score} (gap={max_possible - dp.score}) ***",
+                                      flush=True)
+                            elif dp.score == max_score_val:
+                                strategy_hits[label] += 1
 
-                if time.time() - last_save >= args.save_interval:
-                    pool.sort(key=lambda d: d.score, reverse=True)
-                    _save(pool, out_path)
-                    last_save = time.time()
+                    if time.time() - last_save >= args.save_interval:
+                        pool.sort(key=lambda d: d.score, reverse=True)
+                        _save(pool, out_path)
+                        last_save = time.time()
+            finally:
+                # Cancel pending futures and shut down executor cleanly
+                for f in futures:
+                    f.cancel()
+                executor.shutdown(wait=False, cancel_futures=True)
 
         elapsed = time.time() - pass_start
         pool.sort(key=lambda d: d.score, reverse=True)
@@ -255,6 +265,10 @@ def main():
             print(f"Strategy hits so far: {dict(strategy_hits.most_common())}")
         _save(pool, out_path)
         print(f"Saved {len(pool)} graphs to {out_path}")
+
+    print(f"\nDone. Final pool: {len(pool)} graphs | best: {best_score} (gap={max_possible - best_score})")
+    if strategy_hits:
+        print(f"Strategy hits: {dict(strategy_hits.most_common())}")
 
 
 if __name__ == "__main__":
