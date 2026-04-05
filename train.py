@@ -714,6 +714,7 @@ def get_parser():
     parser.add_argument("--temp_span", type=int, default=0, help="temperature span")
     parser.add_argument("--inc_temp", type=float, default=0.0, help="temperature")
     parser.add_argument("--keep_only_unique", type=bool_flag, default="true", help="keep only unique data")
+    parser.add_argument("--wl_dedup", type=bool_flag, default="false", help="also deduplicate by WL graph hash (catches isomorphic duplicates)")
     parser.add_argument("--save_best", type=bool_flag, default="false", help="save best model based on test loss")
 
     # path and ports

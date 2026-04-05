@@ -221,6 +221,25 @@ def make_train_test(data, ntest):
     return train_set, test_set
 
 
+def wl_dedup(data):
+    """Deduplicate by WL graph hash (catches isomorphic graphs that feature-string dedup misses)."""
+    try:
+        import networkx as nx
+        from networkx.algorithms.graph_hashing import weisfeiler_lehman_graph_hash
+    except ImportError:
+        logger.warning("networkx not available, skipping WL dedup")
+        return data
+    seen = set()
+    out = []
+    for d in data:
+        g = nx.from_numpy_array(d.data)
+        h = weisfeiler_lehman_graph_hash(g)
+        if h not in seen:
+            seen.add(h)
+            out.append(d)
+    return out
+
+
 def compute_unique_data(old_data, new_data=None):
     def add_unique(src, unique_hashes):
         des = []
@@ -246,6 +265,11 @@ def update_datasets(args, data, train_set, test_set, train_path, test_path):
         data, _ = compute_unique_data(data)
         aft = len(data)
         logger.info(f"Unique processing: {aft} examples left, {bef-aft} duplicates")
+        if getattr(args, 'wl_dedup', False):
+            bef2 = len(data)
+            data = wl_dedup(data)
+            aft2 = len(data)
+            logger.info(f"WL dedup: {aft2} examples left, {bef2-aft2} isomorphic duplicates removed")
         do_stats(-1, data)
         if aft / (bef + 1) < 0.9:
             inc_temp = True
