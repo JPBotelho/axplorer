@@ -1,9 +1,9 @@
 ```bash
 python3 train.py \
     --env_name cage \
-    --exp_name cage85_N80 \
-    --N 80 \
-    --k 8 \
+    --exp_name cage65_N40 \
+    --N 40 \
+    --k 6 \
     --encoding_tokens single_integer \
     --max_len 350 \
     --gensize 1500000 \
