@@ -49,7 +49,7 @@ class BaseEnvironment(object):
         return
 
 
-def compute_stats(scores):
+def compute_stats(scores, target_score=None):
     num_bins = 200
     if len(scores) == 0:
         logger.info(f"No valid examples")
@@ -67,6 +67,9 @@ def compute_stats(scores):
     logger.info(f"Stdev score: {stdev}")
     logger.info(f"Max score: {max_score}")
     logger.info(f"Top 1 percentile score: {top_1_percentile}")
+    if target_score is not None:
+        logger.info(f"Target score (perfect solution): {target_score}")
+        logger.info(f"Gap to target: {target_score - max_score}")
 
     logger.info(f"Distribution of scores:")
     counts = Counter(sorted(scores))
@@ -96,7 +99,10 @@ def do_stats(n_invalid, data):
     logger.info(f"### Score distribution ###")
     if n_invalid >= 0:
         logger.info(f"Invalid examples: before local search: {n_invalid}, after: {len(data) - len(scores)}")
-    return compute_stats(scores)
+    target_score = None
+    if len(data) > 0 and hasattr(data[0], 'target_score'):
+        target_score = data[0].target_score()
+    return compute_stats(scores, target_score=target_score)
 
 
 def _do_score(d, always_search: bool = False, redeem_only: bool = False, pars=None):
