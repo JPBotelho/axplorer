@@ -7,12 +7,43 @@ from logging import getLogger
 
 logger = getLogger()
 
+def _origin_bucket(origin: str) -> str:
+    """
+    Coarsen provenance into a small number of buckets for reporting.
+    We intentionally avoid per-epoch detail here.
+    """
+    if not origin:
+        return "unknown"
+    if origin == "generated":
+        return "generated"
+    if origin == "sampled" or origin.startswith("epoch-"):
+        return "transformer"
+    return "other"
+
+
+def log_origin_mix(data) -> None:
+    """
+    Log the percentage of datapoints by provenance bucket.
+    """
+    if not data:
+        return
+    buckets = Counter(_origin_bucket(getattr(d, "origin", "unknown")) for d in data)
+    total = sum(buckets.values())
+    parts = []
+    for k in ("generated", "transformer", "other", "unknown"):
+        if k in buckets:
+            parts.append(f"{k}={100.0 * buckets[k] / total:.1f}% ({buckets[k]})")
+    logger.info("Origin mix: " + ", ".join(parts))
+
 
 class DataPoint(ABC):
     def __init__(self):
         super().__init__()
         self.score = -1
         self.features = ""
+        # Provenance annotation. This is intended to be set at creation time and
+        # preserved through local search / improvements derived from this object.
+        self.origin = "unknown"
 
     @abstractmethod
     def calc_score(self):
@@ -36,6 +67,7 @@ class DataPoint(ABC):
             cls._update_class_params(pars)
         for _ in range(batch_size):
             d = cls(N=N, init=True)
+            d.origin = "generated"
             if d.score >= 0:
                 out.append(d)
         return out
@@ -115,6 +147,7 @@ def do_stats(n_invalid, data):
     """
     scores = [d.score for d in data if d.score >= 0]
     logger.info(f"### Score distribution ###")
+    log_origin_mix([d for d in data if getattr(d, "score", -1) >= 0])
     if n_invalid >= 0:
         logger.info(f"Invalid examples: before local search: {n_invalid}, after: {len(data) - len(scores)}")
     target_score = None

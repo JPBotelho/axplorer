@@ -58,6 +58,7 @@ def _deep_search_worker(datapoint, stop_event, result_queue, worker_id, pars):
                     improvements += 1
                     # Build a datapoint and send it back
                     new_dp = CageDataPoint(N=N, init=False)
+                    new_dp.origin = getattr(dp, "origin", "unknown")
                     new_dp.data = snapshots[i].copy()
                     new_dp.calc_features()
                     new_dp.calc_score()
@@ -287,7 +288,7 @@ if __name__ == "__main__":
         elif args.device == "mps":
             torch.mps.empty_cache()
 
-        new_data = sample_and_score(model, args, stoi, itos, env, temperature, args.temp_span)
+        new_data = sample_and_score(model, args, stoi, itos, env, temperature, args.temp_span, epoch=epoch)
         log_resources(f"Epoch {epoch} AFTER_SAMPLE")
 
         if args.device == "cuda":

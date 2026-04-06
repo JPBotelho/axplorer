@@ -422,6 +422,7 @@ class CageDataPoint(DataPoint):
         improved = []
         for i in range(n_snapshots):
             dp = CageDataPoint(N=N, init=False)
+            dp.origin = getattr(self, "origin", "unknown")
             dp.data = snapshots[i].copy()
             dp.calc_features()
             dp.calc_score()

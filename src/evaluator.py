@@ -66,7 +66,7 @@ def cpu_sink(fn, decouple=False):
         sink.join()
 
 
-def sample_and_score(model, args, stoi, itos, env, temp, temp_span=0):
+def sample_and_score(model, args, stoi, itos, env, temp, temp_span=0, epoch=None):
     sample_batch_size = args.gen_batch_size
     todo = args.num_samples_from_model // sample_batch_size
     DETOK_CHUNK_SIZE = 10
@@ -85,6 +85,13 @@ def sample_and_score(model, args, stoi, itos, env, temp, temp_span=0):
         nonlocal total_invalid
         all_data = [batch_numpy[j] for batch_numpy in batches for j in range(batch_numpy.shape[0])]
         detok_results = detokenize(all_data, args, env, executor=executor)
+        # Annotate provenance for model-sampled graphs.
+        if epoch is not None:
+            tag = f"epoch-{epoch}"
+        else:
+            tag = "sampled"
+        for d in detok_results:
+            d.origin = tag
         valid_data, n_invalid, processed_data = do_score(detok_results, args=args, executor=executor)
         with results_lock:
             results.extend(valid_data)
