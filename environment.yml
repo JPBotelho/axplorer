@@ -9,6 +9,7 @@ dependencies:
   - numba
   - tqdm
   - pyyaml
+  - psutil
   - pip
   - pip:
     - torch>=2.0
