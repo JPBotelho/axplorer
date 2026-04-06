@@ -10,6 +10,4 @@ dependencies:
   - tqdm
   - pyyaml
   - psutil
-  - pytorch
-  - pytorch-cuda=12.4
   - pip
