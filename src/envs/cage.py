@@ -218,6 +218,101 @@ def _fix_overdegree(A, N, k):
     return A
 
 
+@njit(cache=True)
+def _deep_search(A, N, k, max_rounds, seed):
+    """Stochastic local search: repeatedly perturb and re-add, keeping improvements.
+    Runs for max_rounds iterations. Each round:
+      1. Pick a random edge, remove it
+      2. Pick another random edge from the same vertex, remove it
+      3. Greedily re-add edges to restore degree
+      4. Keep if score didn't worsen (fewer violations)
+    """
+    np.random.seed(seed)
+
+    def _score_fast(A, N, k):
+        """Fast score: just count violations (lower = better). 0 = perfect."""
+        deg_pen = 0
+        for i in range(N):
+            d = 0
+            for j in range(N):
+                d += A[i, j]
+            diff = d - k
+            if diff < 0:
+                deg_pen -= diff
+            else:
+                deg_pen += diff
+
+        triangles = 0
+        for i in range(N):
+            for j in range(i + 1, N):
+                if A[i, j] == 0:
+                    continue
+                for w in range(j + 1, N):
+                    if A[i, w] == 1 and A[j, w] == 1:
+                        triangles += 1
+
+        four_cycles = 0
+        for i in range(N):
+            for j in range(i + 1, N):
+                cn = 0
+                for w in range(N):
+                    if A[i, w] == 1 and A[j, w] == 1:
+                        cn += 1
+                if cn >= 2:
+                    four_cycles += cn * (cn - 1) // 2
+        four_cycles //= 2
+
+        return deg_pen + triangles + four_cycles
+
+    best_A = A.copy()
+    best_viol = _score_fast(A, N, k)
+
+    for _ in range(max_rounds):
+        # Save current state
+        saved_A = A.copy()
+
+        # Pick a random existing edge to perturb
+        edges_i = np.empty(N * k, dtype=np.int32)
+        edges_j = np.empty(N * k, dtype=np.int32)
+        n_edges = 0
+        for i in range(N):
+            for j in range(i + 1, N):
+                if A[i, j] == 1:
+                    edges_i[n_edges] = i
+                    edges_j[n_edges] = j
+                    n_edges += 1
+
+        if n_edges == 0:
+            break
+
+        # Remove 2-4 random edges
+        n_remove = min(2 + np.random.randint(0, 3), n_edges)
+        removed = np.zeros(n_edges, dtype=np.uint8)
+        for _ in range(n_remove):
+            idx = np.random.randint(0, n_edges)
+            while removed[idx] == 1:
+                idx = np.random.randint(0, n_edges)
+            removed[idx] = 1
+            ei, ej = edges_i[idx], edges_j[idx]
+            A[ei, ej] = 0
+            A[ej, ei] = 0
+
+        # Greedily re-add edges (different random order → different result)
+        A = _greedy_add_edges_numba(A, N, k, np.random.randint(0, 2**31))
+
+        viol = _score_fast(A, N, k)
+        if viol <= best_viol:
+            best_viol = viol
+            best_A = A.copy()
+            if best_viol == 0:
+                break
+        else:
+            # Revert
+            A = saved_A
+
+    return best_A
+
+
 # ────────────────────────────────────────────────────────────
 # DataPoint and Environment classes
 # ────────────────────────────────────────────────────────────
@@ -285,6 +380,21 @@ class CageDataPoint(DataPoint):
         if improve_with_local_search:
             self.data = _greedy_add_edges_numba(self.data, N, k, np.random.randint(0, 2**31))
 
+        if self.MAKE_OBJECT_CANONICAL:
+            self.data = sort_graph_based_on_degree(self.data)
+        self.calc_features()
+        self.calc_score()
+
+    def deep_local_search(self, max_rounds=10000):
+        """Deep stochastic local search: perturb edges and greedily re-add, keeping improvements."""
+        N = self.N
+        k = self.K_REG
+        # First clean up
+        self.data = _remove_short_cycle_edges(self.data, N, 500)
+        self.data = _fix_overdegree(self.data, N, k)
+        self.data = _greedy_add_edges_numba(self.data, N, k, np.random.randint(0, 2**31))
+        # Then deep search
+        self.data = _deep_search(self.data, N, k, max_rounds, np.random.randint(0, 2**31))
         if self.MAKE_OBJECT_CANONICAL:
             self.data = sort_graph_based_on_degree(self.data)
         self.calc_features()

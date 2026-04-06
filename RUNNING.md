@@ -21,5 +21,5 @@ python3 train.py \
     --num_workers 32 \
     --bg_search true \
     --bg_workers 21 \
-    --bg_samples 50000
+    --bg_rounds 50000
 ```

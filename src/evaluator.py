@@ -6,6 +6,7 @@ from logging import getLogger
 
 import numpy as np
 import torch
+from tqdm import tqdm
 
 from src.datasets import detokenize
 from src.envs.environment import do_score, do_stats
@@ -77,6 +78,9 @@ def sample_and_score(model, args, stoi, itos, env, temp, temp_span=0):
 
     executor = ProcessPoolExecutor(max_workers=min(20, args.num_workers))
 
+    sample_bar = tqdm(total=todo * sample_batch_size, desc="Sampling", unit="seq", position=0)
+    score_bar = tqdm(total=todo * sample_batch_size, desc="Scoring", unit="seq", position=1)
+
     def process_batches(batches):
         nonlocal total_invalid
         all_data = [batch_numpy[j] for batch_numpy in batches for j in range(batch_numpy.shape[0])]
@@ -86,6 +90,7 @@ def sample_and_score(model, args, stoi, itos, env, temp, temp_span=0):
             results.extend(valid_data)
             total_invalid += n_invalid
             all_processed_data.extend(processed_data)
+            score_bar.update(len(all_data))
 
     with cpu_sink(process_batches, decouple=True) as sink:
         pending_batches = []
@@ -95,10 +100,6 @@ def sample_and_score(model, args, stoi, itos, env, temp, temp_span=0):
                 curr_temp = temp + 0.1 * np.random.randint(temp_span + 1)
             else:
                 curr_temp = temp
-            if i % 100 == 0:
-                with results_lock:
-                    scored_so_far = len(results)
-                logger.info(f"{i*sample_batch_size} / {todo * sample_batch_size} samples generated, {scored_so_far} scored")
 
             X_init = torch.empty((sample_batch_size, 1), dtype=torch.long)
             X_init[:, 0] = stoi["BOS"]
@@ -106,6 +107,7 @@ def sample_and_score(model, args, stoi, itos, env, temp, temp_span=0):
             top_k = args.top_k if args.top_k != -1 else None
             batch_numpy = model.generate(X_init, args.max_len + 1, temperature=curr_temp, top_k=top_k, do_sample=True).cpu().numpy()
 
+            sample_bar.update(sample_batch_size)
             pending_batches.append(batch_numpy)
 
             if len(pending_batches) >= DETOK_CHUNK_SIZE:
@@ -116,6 +118,8 @@ def sample_and_score(model, args, stoi, itos, env, temp, temp_span=0):
             sink.submit(pending_batches)
 
     executor.shutdown(wait=True)
+    sample_bar.close()
+    score_bar.close()
 
     do_stats(total_invalid, all_processed_data)
 

@@ -66,9 +66,9 @@ def get_parser():
     parser.add_argument("--exp_id", type=str, default="", help="Experiment ID")
     parser.add_argument("--cpu", type=bool_flag, default="false", help="run on cpu only")
     parser.add_argument("--data_generation_only", type=bool_flag, default="false", help="only generate data and exit")
-    parser.add_argument("--bg_search", type=bool_flag, default="false", help="run background local search on CPU during training")
-    parser.add_argument("--bg_workers", type=int, default=-1, help="number of background search workers (-1 = 2/3 of num_workers)")
-    parser.add_argument("--bg_samples", type=int, default=10000, help="number of existing graphs to improve via local search per epoch")
+    parser.add_argument("--bg_search", type=bool_flag, default="false", help="run deep local search on CPU during GPU training")
+    parser.add_argument("--bg_workers", type=int, default=-1, help="number of background search workers (-1 = 2/3 of num_workers), one graph per worker")
+    parser.add_argument("--bg_rounds", type=int, default=50000, help="number of perturbation rounds per graph in deep search")
 
     return parser
 
@@ -148,7 +148,7 @@ if __name__ == "__main__":
     bg_workers = args.bg_workers if args.bg_workers > 0 else (args.num_workers * 2 // 3)
     bg_executor = ProcessPoolExecutor(max_workers=bg_workers) if args.bg_search else None
     if args.bg_search:
-        logger.info(f"Background local search enabled: {bg_workers} workers, improving top {args.bg_samples} graphs/epoch")
+        logger.info(f"Background deep search enabled: {bg_workers} workers, {args.bg_rounds} rounds/graph")
 
     # Track best score seen so far for alerting
     best_score_seen = max((d.score for d in train_set), default=0)
@@ -179,36 +179,32 @@ if __name__ == "__main__":
                 f"Memory allocated: {torch.mps.current_allocated_memory()/(1024*1024):.2f}MB, reserved: {torch.mps.driver_allocated_memory()/(1024*1024):.2f}MB"
             )
 
-        # Launch background local search on existing population while GPU trains
+        # Launch deep local search: one graph per core, top graphs from population
         bg_future_list = []
         if bg_executor is not None:
-            pars = classname._save_class_params()
-            # Take up to bg_samples from train_set, sorted by score (best first)
             import copy
-            bg_pool = sorted(train_set, key=lambda d: d.score, reverse=True)[:args.bg_samples]
-            bg_pool = copy.deepcopy(bg_pool)  # deep copy so we don't mutate originals
-            # Split into chunks for workers
-            CHUNK = max(1, len(bg_pool) // bg_workers)
-            for i in range(0, len(bg_pool), CHUNK):
-                chunk = bg_pool[i:i + CHUNK]
+            pars = classname._save_class_params()
+            bg_pool = sorted(train_set, key=lambda d: d.score, reverse=True)[:bg_workers]
+            bg_pool = copy.deepcopy(bg_pool)
+            for dp in bg_pool:
                 bg_future_list.append(bg_executor.submit(
-                    classname._batch_local_search, chunk, pars
+                    classname._deep_search_single, dp, args.bg_rounds, pars
                 ))
-            logger.info(f"Background search: improving {len(bg_pool)} graphs on {bg_workers} workers")
+            logger.info(f"Background deep search: {len(bg_pool)} graphs, {args.bg_rounds} rounds each, on {bg_workers} workers")
 
         batch_loader = InfiniteDataLoader(train_dataset, batch_size=args.batch_size, pin_memory=True, num_workers=args.num_workers)
         best_loss = train(model, args, batch_loader, optimizer, test_dataset, current_best_loss=best_loss)
         log_resources(f"Epoch {epoch} AFTER_TRAIN")
         force_release_memory()
 
-        # Collect background search results
+        # Collect deep search results
         bg_data = []
         if bg_future_list:
             for future in bg_future_list:
-                chunk = future.result()
-                if chunk:
-                    bg_data.extend(chunk)
-            logger.info(f"Background search: collected {len(bg_data)} valid samples")
+                dp = future.result()
+                if dp is not None and dp.score >= 0:
+                    bg_data.append(dp)
+            logger.info(f"Background deep search: collected {len(bg_data)} improved graphs")
 
         logger.info(f"Sample with temperature {temperature} to {temperature+0.1*args.temp_span}")
         if args.device == "cuda":
