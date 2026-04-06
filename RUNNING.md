@@ -17,5 +17,6 @@ python3 train.py \
     --n_layer 6 \
     --n_head 8 \
     --n_embd 256 \
-    --batch_size 128
+    --batch_size 128 \
+    --num_workers 32
 ```
