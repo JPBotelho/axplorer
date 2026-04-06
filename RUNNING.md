@@ -18,5 +18,8 @@ python3 train.py \
     --n_head 8 \
     --n_embd 256 \
     --batch_size 128 \
-    --num_workers 32
+    --num_workers 32 \
+    --bg_search true \
+    --bg_workers 21 \
+    --bg_samples 50000
 ```

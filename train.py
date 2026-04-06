@@ -1,6 +1,8 @@
 import argparse
 import os
 import time
+from concurrent.futures import ProcessPoolExecutor
+from itertools import repeat
 from logging import getLogger
 
 import numpy as np
@@ -64,6 +66,9 @@ def get_parser():
     parser.add_argument("--exp_id", type=str, default="", help="Experiment ID")
     parser.add_argument("--cpu", type=bool_flag, default="false", help="run on cpu only")
     parser.add_argument("--data_generation_only", type=bool_flag, default="false", help="only generate data and exit")
+    parser.add_argument("--bg_search", type=bool_flag, default="false", help="run background local search on CPU during training")
+    parser.add_argument("--bg_workers", type=int, default=-1, help="number of background search workers (-1 = 2/3 of num_workers)")
+    parser.add_argument("--bg_samples", type=int, default=10000, help="number of background search samples per epoch")
 
     return parser
 
@@ -139,6 +144,15 @@ if __name__ == "__main__":
     metric_file = os.path.join(args.dump_path, "metrics.txt")
     write_important_metrics(metrics, n_epoch, metric_file, command=args.command)
 
+    # Background search setup
+    bg_workers = args.bg_workers if args.bg_workers > 0 else (args.num_workers * 2 // 3)
+    bg_executor = ProcessPoolExecutor(max_workers=bg_workers) if args.bg_search else None
+    if args.bg_search:
+        logger.info(f"Background search enabled: {bg_workers} workers, {args.bg_samples} samples/epoch")
+
+    # Track best score seen so far for alerting
+    best_score_seen = max((d.score for d in train_set), default=0)
+
     for epoch in range(n_epoch, args.max_epochs):
         logger.info(f"==== Starting Epoch {n_epoch} =====")
         log_resources(f"Epoch {epoch} START")
@@ -165,10 +179,34 @@ if __name__ == "__main__":
                 f"Memory allocated: {torch.mps.current_allocated_memory()/(1024*1024):.2f}MB, reserved: {torch.mps.driver_allocated_memory()/(1024*1024):.2f}MB"
             )
 
+        # Launch background CPU search BEFORE training starts (runs concurrently with GPU train)
+        bg_future_list = []
+        if bg_executor is not None:
+            pars = classname._save_class_params()
+            BATCH = args.gen_batch_size
+            bg_batch_counts = [BATCH] * (args.bg_samples // BATCH)
+            bg_rem = args.bg_samples % BATCH
+            if bg_rem:
+                bg_batch_counts.append(bg_rem)
+            for bc in bg_batch_counts:
+                bg_future_list.append(bg_executor.submit(
+                    classname._batch_generate_search_and_score, bc, args.N, pars
+                ))
+            logger.info(f"Background search: launched {args.bg_samples} samples on {bg_workers} workers")
+
         batch_loader = InfiniteDataLoader(train_dataset, batch_size=args.batch_size, pin_memory=True, num_workers=args.num_workers)
         best_loss = train(model, args, batch_loader, optimizer, test_dataset, current_best_loss=best_loss)
         log_resources(f"Epoch {epoch} AFTER_TRAIN")
         force_release_memory()
+
+        # Collect background search results
+        bg_data = []
+        if bg_future_list:
+            for future in bg_future_list:
+                chunk = future.result()
+                if chunk:
+                    bg_data.extend(chunk)
+            logger.info(f"Background search: collected {len(bg_data)} valid samples")
 
         logger.info(f"Sample with temperature {temperature} to {temperature+0.1*args.temp_span}")
         if args.device == "cuda":
@@ -184,12 +222,27 @@ if __name__ == "__main__":
         elif args.device == "mps":
             torch.mps.empty_cache()
 
-        # Possible to add another generation method here and mix it before taking the best
+        # Merge background search data with model samples
+        if bg_data:
+            new_data.extend(bg_data)
+            logger.info(f"Total new data (model + background): {len(new_data)}")
+
+        # Check for new best scores and alert
+        near_best_count = 0
+        for d in new_data:
+            if d.score >= 0:
+                if d.score > best_score_seen:
+                    logger.info(f"*** NEW BEST SCORE: {d.score} (previous best: {best_score_seen}) ***")
+                    best_score_seen = d.score
+                elif d.score >= best_score_seen - 10:
+                    near_best_count += 1
+        if near_best_count > 0:
+            logger.info(f"*** {near_best_count} samples within 10 of best score {best_score_seen} ***")
+
         train_set, test_set, inc_temp = update_datasets(args, new_data, train_set, test_set, train_data_path, test_data_path)
         log_resources(f"Epoch {epoch} AFTER_UPDATE_DATASETS")
         force_release_memory()
 
-        # Possible to add another generation method here and mix it before taking the best
         if inc_temp and args.inc_temp > 0.0:
             temperature += args.inc_temp
 
@@ -202,3 +255,6 @@ if __name__ == "__main__":
             f.write(str(temperature))
 
         write_important_metrics(metrics, n_epoch, metric_file)
+
+    if bg_executor is not None:
+        bg_executor.shutdown(wait=False)
