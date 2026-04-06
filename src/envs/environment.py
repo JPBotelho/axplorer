@@ -99,7 +99,7 @@ class BaseEnvironment(object):
         return
 
 
-def compute_stats(scores, target_score=None):
+def compute_stats(scores, target_score=None, data_points=None):
     num_bins = 200
     if len(scores) == 0:
         logger.info(f"No valid examples")
@@ -123,6 +123,17 @@ def compute_stats(scores, target_score=None):
 
     logger.info(f"Distribution of scores:")
     counts = Counter(sorted(scores))
+    score_origin = None
+    if data_points is not None:
+        score_origin = {}
+        for d in data_points:
+            s = getattr(d, "score", -1)
+            if s < 0:
+                continue
+            bucket = _origin_bucket(getattr(d, "origin", "unknown"))
+            if s not in score_origin:
+                score_origin[s] = Counter()
+            score_origin[s][bucket] += 1
     if len(counts) > num_bins:
         min_score, max_score = min(scores), max(scores)
         bin_width = (max_score - min_score) / num_bins
@@ -136,7 +147,16 @@ def compute_stats(scores, target_score=None):
             logger.info(f"Score [{start:.2f}, {end:.2f}): Count: {count}")
     else:
         for score, count in counts.items():
-            logger.info(f"Score {score}: Count: {count}")
+            if score_origin is None or score not in score_origin:
+                logger.info(f"Score {score}: Count: {count}")
+            else:
+                b = score_origin[score]
+                total = sum(b.values()) or count
+                parts = []
+                for k in ("generated", "transformer", "other", "unknown"):
+                    if k in b:
+                        parts.append(f"{k}={100.0 * b[k] / total:.1f}% ({b[k]})")
+                logger.info(f"Score {score}: Count: {count} | " + ", ".join(parts))
     logger.info("--------------------------------")
     return {"mean": mean, "median": median, "top_1_percentile": top_1_percentile, "max": max_score}
 
@@ -153,7 +173,7 @@ def do_stats(n_invalid, data):
     target_score = None
     if len(data) > 0 and hasattr(data[0], 'target_score'):
         target_score = data[0].target_score()
-    return compute_stats(scores, target_score=target_score)
+    return compute_stats(scores, target_score=target_score, data_points=[d for d in data if getattr(d, "score", -1) >= 0])
 
 
 def _do_score(d, always_search: bool = False, redeem_only: bool = False, pars=None):
