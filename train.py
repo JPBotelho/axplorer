@@ -263,16 +263,12 @@ if __name__ == "__main__":
         log_resources(f"Epoch {epoch} AFTER_TRAIN")
         force_release_memory()
 
-        # Collect deep search results (drain the queue)
+        # Stop deep-search workers immediately when training is done,
+        # but don't block sampling on waiting for them to exit.
         bg_data = []
         if args.bg_search and bg_result_queue is not None:
-            # Stop workers so they flush
             bg_stop_event.set()
-            for p in bg_processes:
-                p.join(timeout=10)
-                if p.is_alive():
-                    p.terminate()
-            # Drain queue
+            # Opportunistically drain anything already produced.
             while not bg_result_queue.empty():
                 worker_id, dp, rounds, viol = bg_result_queue.get_nowait()
                 if dp is not None:  # actual improvement, not status update
@@ -280,7 +276,7 @@ if __name__ == "__main__":
                     logger.info(f"  Deep search worker {worker_id}: found score {dp.score} at round {rounds} (violations={viol})")
                 else:
                     logger.info(f"  Deep search worker {worker_id}: {rounds} rounds done, best violations={viol}")
-            logger.info(f"Background deep search: collected {len(bg_data)} improved graphs")
+            logger.info(f"Background deep search: collected {len(bg_data)} improved graphs (non-blocking stop)")
 
         logger.info(f"Sample with temperature {temperature} to {temperature+0.1*args.temp_span}")
         if args.device == "cuda":
@@ -300,6 +296,22 @@ if __name__ == "__main__":
         if bg_data:
             new_data.extend(bg_data)
             logger.info(f"Total new data (model + background): {len(new_data)}")
+
+        # Finish background worker cleanup after sampling so we never block sampling.
+        if args.bg_search and bg_result_queue is not None:
+            # Drain anything that arrived during sampling.
+            while not bg_result_queue.empty():
+                worker_id, dp, rounds, viol = bg_result_queue.get_nowait()
+                if dp is not None:
+                    new_data.append(dp)
+                    logger.info(f"  Deep search worker {worker_id}: found score {dp.score} at round {rounds} (violations={viol})")
+                else:
+                    logger.info(f"  Deep search worker {worker_id}: {rounds} rounds done, best violations={viol}")
+            # Now join/terminate quickly so we don't accumulate workers.
+            for p in bg_processes:
+                p.join(timeout=1)
+                if p.is_alive():
+                    p.terminate()
 
         # Check for new best scores and alert
         near_best_count = 0
