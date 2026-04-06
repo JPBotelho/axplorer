@@ -68,7 +68,7 @@ def get_parser():
     parser.add_argument("--data_generation_only", type=bool_flag, default="false", help="only generate data and exit")
     parser.add_argument("--bg_search", type=bool_flag, default="false", help="run background local search on CPU during training")
     parser.add_argument("--bg_workers", type=int, default=-1, help="number of background search workers (-1 = 2/3 of num_workers)")
-    parser.add_argument("--bg_samples", type=int, default=10000, help="number of background search samples per epoch")
+    parser.add_argument("--bg_samples", type=int, default=10000, help="number of existing graphs to improve via local search per epoch")
 
     return parser
 
@@ -148,7 +148,7 @@ if __name__ == "__main__":
     bg_workers = args.bg_workers if args.bg_workers > 0 else (args.num_workers * 2 // 3)
     bg_executor = ProcessPoolExecutor(max_workers=bg_workers) if args.bg_search else None
     if args.bg_search:
-        logger.info(f"Background search enabled: {bg_workers} workers, {args.bg_samples} samples/epoch")
+        logger.info(f"Background local search enabled: {bg_workers} workers, improving top {args.bg_samples} graphs/epoch")
 
     # Track best score seen so far for alerting
     best_score_seen = max((d.score for d in train_set), default=0)
@@ -179,20 +179,22 @@ if __name__ == "__main__":
                 f"Memory allocated: {torch.mps.current_allocated_memory()/(1024*1024):.2f}MB, reserved: {torch.mps.driver_allocated_memory()/(1024*1024):.2f}MB"
             )
 
-        # Launch background CPU search BEFORE training starts (runs concurrently with GPU train)
+        # Launch background local search on existing population while GPU trains
         bg_future_list = []
         if bg_executor is not None:
             pars = classname._save_class_params()
-            BATCH = args.gen_batch_size
-            bg_batch_counts = [BATCH] * (args.bg_samples // BATCH)
-            bg_rem = args.bg_samples % BATCH
-            if bg_rem:
-                bg_batch_counts.append(bg_rem)
-            for bc in bg_batch_counts:
+            # Take up to bg_samples from train_set, sorted by score (best first)
+            import copy
+            bg_pool = sorted(train_set, key=lambda d: d.score, reverse=True)[:args.bg_samples]
+            bg_pool = copy.deepcopy(bg_pool)  # deep copy so we don't mutate originals
+            # Split into chunks for workers
+            CHUNK = max(1, len(bg_pool) // bg_workers)
+            for i in range(0, len(bg_pool), CHUNK):
+                chunk = bg_pool[i:i + CHUNK]
                 bg_future_list.append(bg_executor.submit(
-                    classname._batch_generate_search_and_score, bc, args.N, pars
+                    classname._batch_local_search, chunk, pars
                 ))
-            logger.info(f"Background search: launched {args.bg_samples} samples on {bg_workers} workers")
+            logger.info(f"Background search: improving {len(bg_pool)} graphs on {bg_workers} workers")
 
         batch_loader = InfiniteDataLoader(train_dataset, batch_size=args.batch_size, pin_memory=True, num_workers=args.num_workers)
         best_loss = train(model, args, batch_loader, optimizer, test_dataset, current_best_loss=best_loss)

@@ -41,17 +41,13 @@ class DataPoint(ABC):
         return out
 
     @classmethod
-    def _batch_generate_search_and_score(cls, batch_size, N, pars=None):
-        """Generate + local search. Used for background CPU generation during training."""
-        out = []
+    def _batch_local_search(cls, datapoints, pars=None):
+        """Run local search on existing datapoints. Used for background CPU improvement."""
         if pars is not None:
             cls._update_class_params(pars)
-        for _ in range(batch_size):
-            d = cls(N=N, init=True)
+        for d in datapoints:
             d.local_search(improve_with_local_search=True)
-            if d.score >= 0:
-                out.append(d)
-        return out
+        return datapoints
 
 
 class BaseEnvironment(object):
