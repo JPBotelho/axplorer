@@ -1,8 +1,8 @@
 import argparse
+import copy
+import multiprocessing as mp
 import os
 import time
-from concurrent.futures import ProcessPoolExecutor
-from itertools import repeat
 from logging import getLogger
 
 import numpy as np
@@ -17,6 +17,60 @@ from src.trainer import reload_model_optimizer, train
 from src.utils import bool_flag, force_release_memory, initialize_exp, log_resources, write_important_metrics
 
 logger = getLogger()
+
+
+def _deep_search_worker(datapoint, stop_event, result_queue, worker_id, pars):
+    """Worker process: runs deep local search continuously until stop_event is set.
+    Puts (worker_id, improved_datapoint) on result_queue whenever score improves."""
+    from src.envs.cage import CageDataPoint, _deep_search, _remove_short_cycle_edges, _fix_overdegree, _greedy_add_edges_numba, _score_violations
+    import time
+
+    if pars is not None:
+        CageDataPoint._update_class_params(pars)
+
+    dp = datapoint
+    N = dp.N
+    k = dp.K_REG
+
+    # Initial cleanup
+    dp.data = _remove_short_cycle_edges(dp.data, N, 500)
+    dp.data = _fix_overdegree(dp.data, N, k)
+    dp.data = _greedy_add_edges_numba(dp.data, N, k, np.random.randint(0, 2**31))
+
+    best_viol = _score_violations(dp.data, N, k)
+    rounds = 0
+    improvements = 0
+    last_log = time.time()
+
+    while not stop_event.is_set():
+        # Run a batch of rounds (check stop every 1000 rounds)
+        snapshots, snapshot_info, n_snapshots = _deep_search(
+            dp.data, N, k, 1000, np.random.randint(0, 2**31)
+        )
+        rounds += 1000
+
+        # Check for improvements
+        if n_snapshots > 1:  # >1 because first snapshot is always the starting state
+            for i in range(1, n_snapshots):
+                viol = int(snapshot_info[i, 1])
+                if viol < best_viol:
+                    best_viol = viol
+                    improvements += 1
+                    # Build a datapoint and send it back
+                    new_dp = CageDataPoint(N=N, init=False)
+                    new_dp.data = snapshots[i].copy()
+                    new_dp.calc_features()
+                    new_dp.calc_score()
+                    result_queue.put((worker_id, new_dp, rounds, viol))
+
+            # Continue from best found
+            dp.data = snapshots[n_snapshots - 1].copy()
+
+        # Log every 60 seconds
+        now = time.time()
+        if now - last_log >= 60:
+            result_queue.put((worker_id, None, rounds, best_viol))  # None = status update, not a graph
+            last_log = now
 
 
 def get_parser():
@@ -68,7 +122,6 @@ def get_parser():
     parser.add_argument("--data_generation_only", type=bool_flag, default="false", help="only generate data and exit")
     parser.add_argument("--bg_search", type=bool_flag, default="false", help="run deep local search on CPU during GPU training")
     parser.add_argument("--bg_workers", type=int, default=-1, help="number of background search workers (-1 = 2/3 of num_workers), one graph per worker")
-    parser.add_argument("--bg_rounds", type=int, default=50000, help="number of perturbation rounds per graph in deep search")
 
     return parser
 
@@ -146,9 +199,11 @@ if __name__ == "__main__":
 
     # Background search setup
     bg_workers = args.bg_workers if args.bg_workers > 0 else (args.num_workers * 2 // 3)
-    bg_executor = ProcessPoolExecutor(max_workers=bg_workers) if args.bg_search else None
+    bg_stop_event = None
+    bg_result_queue = None
+    bg_processes = []
     if args.bg_search:
-        logger.info(f"Background deep search enabled: {bg_workers} workers, {args.bg_rounds} rounds/graph")
+        logger.info(f"Background deep search enabled: {bg_workers} workers (one graph each, continuous)")
 
     # Track best score seen so far for alerting
     best_score_seen = max((d.score for d in train_set), default=0)
@@ -179,31 +234,51 @@ if __name__ == "__main__":
                 f"Memory allocated: {torch.mps.current_allocated_memory()/(1024*1024):.2f}MB, reserved: {torch.mps.driver_allocated_memory()/(1024*1024):.2f}MB"
             )
 
-        # Launch deep local search: one graph per core, top graphs from population
-        bg_future_list = []
-        if bg_executor is not None:
-            import copy
+        # Launch deep local search: one graph per core, runs until training finishes
+        if args.bg_search:
+            # Stop any previous workers
+            if bg_stop_event is not None:
+                bg_stop_event.set()
+                for p in bg_processes:
+                    p.join(timeout=5)
+                    if p.is_alive():
+                        p.terminate()
+
+            bg_stop_event = mp.Event()
+            bg_result_queue = mp.Queue()
+            bg_processes = []
             pars = classname._save_class_params()
             bg_pool = sorted(train_set, key=lambda d: d.score, reverse=True)[:bg_workers]
             bg_pool = copy.deepcopy(bg_pool)
-            for dp in bg_pool:
-                bg_future_list.append(bg_executor.submit(
-                    classname._deep_search_single, dp, args.bg_rounds, pars
-                ))
-            logger.info(f"Background deep search: {len(bg_pool)} graphs, {args.bg_rounds} rounds each, on {bg_workers} workers")
+            for wid, dp in enumerate(bg_pool):
+                p = mp.Process(target=_deep_search_worker, args=(dp, bg_stop_event, bg_result_queue, wid, pars))
+                p.daemon = True
+                p.start()
+                bg_processes.append(p)
+            logger.info(f"Background deep search: {len(bg_pool)} graphs on {bg_workers} workers (continuous)")
 
         batch_loader = InfiniteDataLoader(train_dataset, batch_size=args.batch_size, pin_memory=True, num_workers=args.num_workers)
         best_loss = train(model, args, batch_loader, optimizer, test_dataset, current_best_loss=best_loss)
         log_resources(f"Epoch {epoch} AFTER_TRAIN")
         force_release_memory()
 
-        # Collect deep search results
+        # Collect deep search results (drain the queue)
         bg_data = []
-        if bg_future_list:
-            for future in bg_future_list:
-                dp = future.result()
-                if dp is not None and dp.score >= 0:
+        if args.bg_search and bg_result_queue is not None:
+            # Stop workers so they flush
+            bg_stop_event.set()
+            for p in bg_processes:
+                p.join(timeout=10)
+                if p.is_alive():
+                    p.terminate()
+            # Drain queue
+            while not bg_result_queue.empty():
+                worker_id, dp, rounds, viol = bg_result_queue.get_nowait()
+                if dp is not None:  # actual improvement, not status update
                     bg_data.append(dp)
+                    logger.info(f"  Deep search worker {worker_id}: found score {dp.score} at round {rounds} (violations={viol})")
+                else:
+                    logger.info(f"  Deep search worker {worker_id}: {rounds} rounds done, best violations={viol}")
             logger.info(f"Background deep search: collected {len(bg_data)} improved graphs")
 
         logger.info(f"Sample with temperature {temperature} to {temperature+0.1*args.temp_span}")
@@ -254,5 +329,10 @@ if __name__ == "__main__":
 
         write_important_metrics(metrics, n_epoch, metric_file)
 
-    if bg_executor is not None:
-        bg_executor.shutdown(wait=False)
+    # Clean up background workers
+    if args.bg_search and bg_stop_event is not None:
+        bg_stop_event.set()
+        for p in bg_processes:
+            p.join(timeout=5)
+            if p.is_alive():
+                p.terminate()

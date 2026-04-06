@@ -20,6 +20,5 @@ python3 train.py \
     --batch_size 128 \
     --num_workers 32 \
     --bg_search true \
-    --bg_workers 21 \
-    --bg_rounds 50000
+    --bg_workers 21
 ```

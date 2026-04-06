@@ -219,59 +219,72 @@ def _fix_overdegree(A, N, k):
 
 
 @njit(cache=True)
+def _score_violations(A, N, k):
+    """Fast violation count (lower = better). 0 = perfect."""
+    deg_pen = 0
+    for i in range(N):
+        d = 0
+        for j in range(N):
+            d += A[i, j]
+        diff = d - k
+        if diff < 0:
+            deg_pen -= diff
+        else:
+            deg_pen += diff
+
+    triangles = 0
+    for i in range(N):
+        for j in range(i + 1, N):
+            if A[i, j] == 0:
+                continue
+            for w in range(j + 1, N):
+                if A[i, w] == 1 and A[j, w] == 1:
+                    triangles += 1
+
+    four_cycles = 0
+    for i in range(N):
+        for j in range(i + 1, N):
+            cn = 0
+            for w in range(N):
+                if A[i, w] == 1 and A[j, w] == 1:
+                    cn += 1
+            if cn >= 2:
+                four_cycles += cn * (cn - 1) // 2
+    four_cycles //= 2
+
+    return deg_pen + triangles + four_cycles
+
+
+@njit(cache=True)
 def _deep_search(A, N, k, max_rounds, seed):
     """Stochastic local search: repeatedly perturb and re-add, keeping improvements.
-    Runs for max_rounds iterations. Each round:
-      1. Pick a random edge, remove it
-      2. Pick another random edge from the same vertex, remove it
-      3. Greedily re-add edges to restore degree
-      4. Keep if score didn't worsen (fewer violations)
+    Returns array of all snapshots where score improved (including final).
+    Each snapshot is a flattened N*N adjacency matrix.
+    Also returns an array of (round_number, violation_count) for each improvement.
     """
     np.random.seed(seed)
 
-    def _score_fast(A, N, k):
-        """Fast score: just count violations (lower = better). 0 = perfect."""
-        deg_pen = 0
-        for i in range(N):
-            d = 0
-            for j in range(N):
-                d += A[i, j]
-            diff = d - k
-            if diff < 0:
-                deg_pen -= diff
-            else:
-                deg_pen += diff
-
-        triangles = 0
-        for i in range(N):
-            for j in range(i + 1, N):
-                if A[i, j] == 0:
-                    continue
-                for w in range(j + 1, N):
-                    if A[i, w] == 1 and A[j, w] == 1:
-                        triangles += 1
-
-        four_cycles = 0
-        for i in range(N):
-            for j in range(i + 1, N):
-                cn = 0
-                for w in range(N):
-                    if A[i, w] == 1 and A[j, w] == 1:
-                        cn += 1
-                if cn >= 2:
-                    four_cycles += cn * (cn - 1) // 2
-        four_cycles //= 2
-
-        return deg_pen + triangles + four_cycles
+    # Pre-allocate space for improved snapshots (at most max_rounds, but typically few)
+    max_snapshots = 1000
+    snapshots = np.zeros((max_snapshots, N, N), dtype=np.uint8)
+    snapshot_info = np.zeros((max_snapshots, 2), dtype=np.int64)  # (round, violations)
+    n_snapshots = 0
 
     best_A = A.copy()
-    best_viol = _score_fast(A, N, k)
+    best_viol = _score_violations(A, N, k)
 
-    for _ in range(max_rounds):
+    # Save initial state as first snapshot
+    if n_snapshots < max_snapshots:
+        snapshots[n_snapshots] = best_A
+        snapshot_info[n_snapshots, 0] = 0
+        snapshot_info[n_snapshots, 1] = best_viol
+        n_snapshots += 1
+
+    for rnd in range(max_rounds):
         # Save current state
         saved_A = A.copy()
 
-        # Pick a random existing edge to perturb
+        # Collect existing edges
         edges_i = np.empty(N * k, dtype=np.int32)
         edges_j = np.empty(N * k, dtype=np.int32)
         n_edges = 0
@@ -300,17 +313,23 @@ def _deep_search(A, N, k, max_rounds, seed):
         # Greedily re-add edges (different random order → different result)
         A = _greedy_add_edges_numba(A, N, k, np.random.randint(0, 2**31))
 
-        viol = _score_fast(A, N, k)
-        if viol <= best_viol:
+        viol = _score_violations(A, N, k)
+        if viol < best_viol:
             best_viol = viol
             best_A = A.copy()
+            # Save improved snapshot
+            if n_snapshots < max_snapshots:
+                snapshots[n_snapshots] = best_A
+                snapshot_info[n_snapshots, 0] = rnd + 1
+                snapshot_info[n_snapshots, 1] = best_viol
+                n_snapshots += 1
             if best_viol == 0:
                 break
         else:
             # Revert
             A = saved_A
 
-    return best_A
+    return snapshots[:n_snapshots], snapshot_info[:n_snapshots], n_snapshots
 
 
 # ────────────────────────────────────────────────────────────
@@ -386,7 +405,8 @@ class CageDataPoint(DataPoint):
         self.calc_score()
 
     def deep_local_search(self, max_rounds=10000):
-        """Deep stochastic local search: perturb edges and greedily re-add, keeping improvements."""
+        """Deep stochastic local search: perturb edges and greedily re-add, keeping improvements.
+        Returns a list of all intermediate improved graphs (as CageDataPoints)."""
         N = self.N
         k = self.K_REG
         # First clean up
@@ -394,11 +414,28 @@ class CageDataPoint(DataPoint):
         self.data = _fix_overdegree(self.data, N, k)
         self.data = _greedy_add_edges_numba(self.data, N, k, np.random.randint(0, 2**31))
         # Then deep search
-        self.data = _deep_search(self.data, N, k, max_rounds, np.random.randint(0, 2**31))
+        snapshots, snapshot_info, n_snapshots = _deep_search(
+            self.data, N, k, max_rounds, np.random.randint(0, 2**31)
+        )
+
+        # Build list of all improved graphs
+        improved = []
+        for i in range(n_snapshots):
+            dp = CageDataPoint(N=N, init=False)
+            dp.data = snapshots[i].copy()
+            dp.calc_features()
+            dp.calc_score()
+            improved.append(dp)
+
+        # Set self to the best (last snapshot)
+        if n_snapshots > 0:
+            self.data = snapshots[n_snapshots - 1].copy()
         if self.MAKE_OBJECT_CANONICAL:
             self.data = sort_graph_based_on_degree(self.data)
         self.calc_features()
         self.calc_score()
+
+        return improved, snapshot_info[:n_snapshots]
 
     @classmethod
     def _update_class_params(cls, pars):

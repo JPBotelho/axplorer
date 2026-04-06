@@ -50,12 +50,13 @@ class DataPoint(ABC):
         return datapoints
 
     @classmethod
-    def _deep_search_single(cls, datapoint, max_rounds, pars=None):
-        """Run deep stochastic local search on a single datapoint."""
+    def _deep_search_batch(cls, datapoint, max_rounds, pars=None):
+        """Run deep stochastic local search on a single datapoint for max_rounds.
+        Returns (final_datapoint, list_of_all_improved_datapoints, snapshot_info)."""
         if pars is not None:
             cls._update_class_params(pars)
-        datapoint.deep_local_search(max_rounds=max_rounds)
-        return datapoint
+        improved, snapshot_info = datapoint.deep_local_search(max_rounds=max_rounds)
+        return (datapoint, improved, snapshot_info)
 
 
 class BaseEnvironment(object):
