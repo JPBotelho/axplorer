@@ -18,6 +18,8 @@ logger = getLogger()
 FALSY_STRINGS = {"off", "false", "0"}
 TRUTHY_STRINGS = {"on", "true", "1"}
 
+MAX_WORKERS = 20
+
 
 def bool_flag(s):
     """

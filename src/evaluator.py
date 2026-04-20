@@ -9,6 +9,7 @@ import torch
 
 from src.datasets import detokenize
 from src.envs.environment import do_score, do_stats
+from src.utils import MAX_WORKERS
 
 logger = getLogger()
 
@@ -68,14 +69,14 @@ def cpu_sink(fn, decouple=False):
 def sample_and_score(model, args, stoi, itos, env, temp, temp_span=0):
     sample_batch_size = args.gen_batch_size
     todo = args.num_samples_from_model // sample_batch_size
-    DETOK_CHUNK_SIZE = 10
+    DETOK_CHUNK_SIZE = 1
 
     results = []
     total_invalid = 0
     all_processed_data = []
     results_lock = threading.Lock()
 
-    executor = ProcessPoolExecutor(max_workers=min(20, args.num_workers))
+    executor = ProcessPoolExecutor(max_workers=min(MAX_WORKERS, args.num_workers))
 
     def process_batches(batches):
         nonlocal total_invalid
