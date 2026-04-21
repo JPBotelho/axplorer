@@ -8,14 +8,14 @@ micromamba env create -f environment.yml
 ```
 and then run
 ```
-conda activate env_axplorer
+micromamba activate env_axplorer
 ```
 
 ## How to train a model from scratch?
 
 Suppose you want to train a model for the Turan problem using data generated on the fly.
 
-In this case it's pretty easy. From cli, you can just run 
+In this case it's pretty easy. From cli, you can just run
 
 ```bash
 python train.py \
@@ -32,7 +32,7 @@ And wait until the model has been trained. In the command above, `exp_name`is si
 
 ## What if I need to restart a model?
 
-In this case, you need to specify the same configuration and explicitly define exp_id to match the exp_id of the stopped experiment. 
+In this case, you need to specify the same configuration and explicitly define exp_id to match the exp_id of the stopped experiment.
 
 ```bash
 python train.py \
@@ -62,7 +62,7 @@ python train.py \
     --data_generation_only true
 ```
 
-generates and saves 10 million examples. Later you can copy the train and test data to the new experiment. 
+generates and saves 10 million examples. Later you can copy the train and test data to the new experiment.
 
 If you want to generate 10 million examples but store only the best 100,000, you can run
 
@@ -145,7 +145,7 @@ The full list of flags for each specific environment and more details about what
 
 The full list of flags for the model architecture and training parameters can be found in the method `get_parser` of `train.py`. Here, you can find references of the most important flags you should tune for your specific problem.
 
-- Training parameters: 
+- Training parameters:
   - `gensize` is the number of initial data points.
   - `max_epochs` is the maximum number of epochs.
   - `max_steps` is the number of training steps per epoch.
@@ -174,11 +174,11 @@ The full list of flags for the model architecture and training parameters can be
 
 - Environment-specific parameters. When you set up a new problem, there are a few parameters to configure:
 
-  - `k` is the problem-specific dimension: for the Turan problem you work on pairs of nodes, so `k=2`. For the no-5-points-on-a-sphere problem, each point lives in [N]^3, so `k=3`. 
+  - `k` is the problem-specific dimension: for the Turan problem you work on pairs of nodes, so `k=2`. For the no-5-points-on-a-sphere problem, each point lives in [N]^3, so `k=3`.
   - `are_coordinates_symmetric` determines whether coordinates can be shuffled. For the Turan problem, (i, j) and (j, i) represent the same edge on the graph, so `are_coordinates_symmetric=True`. In the other problems listed in the repository, `are_coordinates_symmetric=False`.
   - `encoding_tokens` specifies how to encode the data for the model. If `encoding_tokens=single_integer`, you encode the coordinates as a single number. For instance, for the Turan problem, you encode each edge as Ni+j. For the no-5-points-on-a-sphere problem, you encode each point as N²i+Nj+k. If `encoding_tokens=sequence_k_tokens`, you encode each coordinate as a separate token. For example, if the edge is (i, j), the model will see i and j as two separate tokens. If `encoding_tokens=adjacency`, you encode the full dense adjacency matrix of a graph.
   - `make_object_canonical` is set to True when you want to deduplicate different objects into their canonical form. This is needed only when `keep_only_unique=True`.
-  - `augment_data_representation` is set to True when, after making the object canonical, you want to feed the model with one of the many possible different object representations. For example, for no-5-points-on-a-sphere, there are up to 48 different representations of the same cube. During training, the model sees different data representations to ensure model robustness. 
+  - `augment_data_representation` is set to True when, after making the object canonical, you want to feed the model with one of the many possible different object representations. For example, for no-5-points-on-a-sphere, there are up to 48 different representations of the same cube. During training, the model sees different data representations to ensure model robustness.
 
 
 ## Available environments
@@ -195,4 +195,4 @@ This repository uses the Apache-2.0 License. See [LICENSE](LICENSE) for details.
 
 ## Acknowledgements
 
-The original code of PatternBoost was written by François Charton, Jordan S. Ellenberg, Adam Zsolt Wagner, and Geordie Williamson, and can be found [here](https://github.com/zawagner22/transformers_math_experiments). 
+The original code of PatternBoost was written by François Charton, Jordan S. Ellenberg, Adam Zsolt Wagner, and Geordie Williamson, and can be found [here](https://github.com/zawagner22/transformers_math_experiments).
