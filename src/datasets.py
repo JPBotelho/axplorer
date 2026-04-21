@@ -17,7 +17,7 @@ from src.utils import MAX_WORKERS
 logger = getLogger()
 
 
-def detokenize(data, args, env, executor=None):
+def detokenize(data, args, env, executor=None, pbar=None):
     res = []
     pars = env.tokenizer.dataclass._save_class_params()
     if args.process_pool:
@@ -28,13 +28,16 @@ def detokenize(data, args, env, executor=None):
             for chunk in executor.map(env.tokenizer.decode_batch, data_slices, repeat(pars, len(data_slices))):
                 if chunk:
                     res.extend(chunk)
+                    pbar.update(len(chunk))
         else:
             with ProcessPoolExecutor(max_workers=min(MAX_WORKERS, args.num_workers)) as ex:
                 for chunk in ex.map(env.tokenizer.decode_batch, data_slices, repeat(pars, len(data_slices))):
                     if chunk:
                         res.extend(chunk)
+                        pbar.update(len(chunk))
     else:
         res = env.tokenizer.decode_batch(data, pars)
+        pbar.update(len(res))
     return res
 
 
